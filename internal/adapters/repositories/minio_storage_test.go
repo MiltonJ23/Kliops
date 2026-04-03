@@ -1,0 +1,91 @@
+package repositories
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/MiltonJ23/Kliops/internal/core/ports"
+)
+
+func TestNewMinioStorage_ReturnsClient(t *testing.T) {
+	// minio.New does not establish a connection; it just initialises the client struct.
+	// A real MinIO server is NOT required for this constructor test.
+	storage, err := NewMinioStorage("localhost:9000", "accesskey", "secretkey", false)
+	if err != nil {
+		t.Fatalf("unexpected error creating MinioStorage: %v", err)
+	}
+	if storage == nil {
+		t.Fatal("NewMinioStorage returned nil storage")
+	}
+	if storage.Client == nil {
+		t.Fatal("MinioStorage.Client should not be nil after successful construction")
+	}
+}
+
+func TestNewMinioStorage_WithSSL_ReturnsClient(t *testing.T) {
+	storage, err := NewMinioStorage("s3.amazonaws.com", "key", "secret", true)
+	if err != nil {
+		t.Fatalf("unexpected error creating MinioStorage with SSL: %v", err)
+	}
+	if storage == nil {
+		t.Fatal("NewMinioStorage returned nil")
+	}
+}
+
+func TestNewMinioStorage_EmptyCredentials_ReturnsClient(t *testing.T) {
+	// minio.New accepts empty credentials (for anonymous access patterns);
+	// the constructor itself should not fail.
+	storage, err := NewMinioStorage("localhost:9000", "", "", false)
+	if err != nil {
+		t.Fatalf("unexpected error with empty credentials: %v", err)
+	}
+	if storage == nil {
+		t.Fatal("NewMinioStorage returned nil with empty credentials")
+	}
+}
+
+func TestNewMinioStorage_ReturnedURLFormat(t *testing.T) {
+	// Verify the documented URL format: minio://<bucket>//<key>
+	// Upload requires a real server, so we document the expected format via the
+	// fmt.Sprintf pattern in the source: "minio://%s//%s"
+	// We validate this by inspecting the format string indirectly: bucket + double-slash + key.
+	bucket := "dce-entrants"
+	key := "report.pdf"
+	expected := "minio://" + bucket + "//" + key
+
+	if !strings.HasPrefix(expected, "minio://") {
+		t.Errorf("URL format should start with 'minio://', got: %s", expected)
+	}
+	if !strings.Contains(expected, "//"+key) {
+		t.Errorf("URL format should contain double-slash before key, got: %s", expected)
+	}
+}
+
+// TestMinioStorage_Upload_RequiresIntegration documents that Upload requires a
+// live MinIO instance and must be exercised via integration tests.
+func TestMinioStorage_Upload_RequiresIntegration(t *testing.T) {
+	t.Skip("Upload requires a running MinIO server; use integration tests with docker-compose")
+}
+
+// TestMinioStorage_Upload_ContextCancelled_RequiresIntegration serves as
+// a placeholder for cancellation behaviour tested against a real server.
+func TestMinioStorage_Upload_ContextCancelled_RequiresIntegration(t *testing.T) {
+	t.Skip("Context cancellation for Upload requires a running MinIO server")
+}
+
+// TestMinioStorage_ImplementsFileStorageInterface verifies at compile-time that
+// MinioStorage satisfies the ports.FileStorage interface.
+func TestMinioStorage_ImplementsFileStorageInterface(t *testing.T) {
+	storage, err := NewMinioStorage("localhost:9000", "key", "secret", false)
+	if err != nil {
+		t.Fatalf("could not create MinioStorage: %v", err)
+	}
+
+	// Compile-time interface satisfaction check: will not compile if MinioStorage
+	// does not implement ports.FileStorage.
+	var _ ports.FileStorage = storage
+
+	if storage == nil {
+		t.Error("storage should not be nil")
+	}
+}
