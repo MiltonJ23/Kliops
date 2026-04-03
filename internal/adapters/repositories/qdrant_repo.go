@@ -17,6 +17,9 @@ type QdrantRepository struct {
 }
 
 
+// NewQdrantRepository creates a QdrantRepository configured to talk to the Qdrant instance at qdrantAddr.
+// It opens a gRPC connection using insecure transport credentials, instantiates a Qdrant PointsClient,
+// and returns the repository configured with the provided embedder and collection name or an error if the connection fails.
 func NewQdrantRepository(qdrantAddr string, embedder ports.Embedder, collectionName string) (*QdrantRepository,error) {
 	// first of all, we connect to qdrant through gRPC 
 	conn, connectionError := grpc.NewClient(qdrantAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))

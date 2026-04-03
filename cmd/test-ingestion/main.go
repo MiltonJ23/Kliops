@@ -11,6 +11,9 @@ import (
 )
 
 
+// main runs a small end-to-end test that initializes an Ollama embedder and a Qdrant
+// repository, ingests a hard-coded domain.ReponseHistorique record, then performs a single-item
+// similarity search for a sample client query and prints the matched item's similarity score and response.
 func main() {
 	ctx := context.Background()
 
@@ -52,4 +55,3 @@ func main() {
 	fmt.Println("-----------------------------------------------------")
 
 }
-

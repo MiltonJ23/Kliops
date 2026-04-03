@@ -17,7 +17,7 @@ type OllamaEmbedder struct {
 	Client *http.Client
 }
 
-// initialize the client use to talk to my local model (running in ollama)
+// NewOllamaEmbedder creates an OllamaEmbedder configured with the provided base URL and model and a default HTTP client.
 func NewOllamaEmbedder(baseUrl,model string) *OllamaEmbedder {
 	return &OllamaEmbedder{
 		BaseUrl: baseUrl,
