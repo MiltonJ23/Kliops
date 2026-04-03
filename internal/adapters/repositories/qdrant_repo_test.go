@@ -16,34 +16,54 @@ import (
 // ---------------------------------------------------------------------------
 
 type mockEmbedder struct {
-	vector []float32
-	err    error
+	embedding []float32
+	err       error
+	callCount int
+	lastText  string
 }
 
-func (m *mockEmbedder) CreateEmbedding(_ context.Context, _ string) ([]float32, error) {
-	return m.vector, m.err
+func (m *mockEmbedder) CreateEmbedding(_ context.Context, text string) ([]float32, error) {
+	m.callCount++
+	m.lastText = text
+	return m.embedding, m.err
 }
 
 // ---------------------------------------------------------------------------
-// Mock: qdrant.PointsClient (27 methods required by the interface)
+// Mock: qdrant.PointsClient
+// The interface has many gRPC-generated methods; only Upsert and Search are
+// exercised by QdrantRepository. All others return nil, nil.
 // ---------------------------------------------------------------------------
 
 type mockPointsClient struct {
-	upsertResponse *qdrant.PointsOperationResponse
-	upsertErr      error
-	searchResponse *qdrant.SearchResponse
-	searchErr      error
+	upsertErr    error
+	searchResult *qdrant.SearchResponse
+	searchErr    error
+
+	upsertCalledWith  *qdrant.UpsertPoints
+	searchCalledWith  *qdrant.SearchPoints
 }
 
-func (m *mockPointsClient) Upsert(_ context.Context, _ *qdrant.UpsertPoints, _ ...grpc.CallOption) (*qdrant.PointsOperationResponse, error) {
-	return m.upsertResponse, m.upsertErr
+func (m *mockPointsClient) Upsert(_ context.Context, in *qdrant.UpsertPoints, _ ...grpc.CallOption) (*qdrant.PointsOperationResponse, error) {
+	m.upsertCalledWith = in
+	if m.upsertErr != nil {
+		return nil, m.upsertErr
+	}
+	return &qdrant.PointsOperationResponse{}, nil
 }
 
-func (m *mockPointsClient) Search(_ context.Context, _ *qdrant.SearchPoints, _ ...grpc.CallOption) (*qdrant.SearchResponse, error) {
-	return m.searchResponse, m.searchErr
+func (m *mockPointsClient) Search(_ context.Context, in *qdrant.SearchPoints, _ ...grpc.CallOption) (*qdrant.SearchResponse, error) {
+	m.searchCalledWith = in
+	if m.searchErr != nil {
+		return nil, m.searchErr
+	}
+	if m.searchResult != nil {
+		return m.searchResult, nil
+	}
+	return &qdrant.SearchResponse{}, nil
 }
 
-// The remaining interface methods are required but not exercised by our code paths.
+// --- Unused methods to satisfy the qdrant.PointsClient interface ---
+
 func (m *mockPointsClient) Delete(_ context.Context, _ *qdrant.DeletePoints, _ ...grpc.CallOption) (*qdrant.PointsOperationResponse, error) {
 	return nil, nil
 }
@@ -123,14 +143,14 @@ func (m *mockPointsClient) SearchMatrixOffsets(_ context.Context, _ *qdrant.Sear
 	return nil, nil
 }
 
-// Compile-time check.
+// Compile-time check that mockPointsClient satisfies the interface.
 var _ qdrant.PointsClient = (*mockPointsClient)(nil)
 
 // ---------------------------------------------------------------------------
-// Helper: build a QdrantRepository with mock internals (bypasses gRPC dial).
+// Helper: build a QdrantRepository with injected mocks
 // ---------------------------------------------------------------------------
 
-func newTestRepo(embedder ports.Embedder, client qdrant.PointsClient, collection string) *QdrantRepository {
+func newTestRepo(client qdrant.PointsClient, embedder ports.Embedder, collection string) *QdrantRepository {
 	return &QdrantRepository{
 		Client:     client,
 		Embedder:   embedder,
@@ -139,284 +159,335 @@ func newTestRepo(embedder ports.Embedder, client qdrant.PointsClient, collection
 }
 
 // ---------------------------------------------------------------------------
-// QdrantRepository.Ingest tests
+// Ingest tests
 // ---------------------------------------------------------------------------
 
-func TestIngest_Success(t *testing.T) {
-	embedder := &mockEmbedder{vector: []float32{0.1, 0.2, 0.3}}
-	client := &mockPointsClient{upsertResponse: &qdrant.PointsOperationResponse{}}
+func TestIngestSuccess(t *testing.T) {
+	emb := &mockEmbedder{embedding: []float32{0.1, 0.2, 0.3}}
+	client := &mockPointsClient{}
+	repo := newTestRepo(client, emb, "test-collection")
 
-	repo := newTestRepo(embedder, client, "test_collection")
-
-	archive := domain.ReponseHistorique{
+	reponse := domain.ReponseHistorique{
 		ID:                "uuid-001",
-		AppelOffreID:      "AO-2023-001",
-		ExigenceTechnique: "Méthodologie de pose de revêtements",
-		ReponseApportee:   "Nous utiliserons du PVC homogène.",
+		AppelOffreID:      "AO-2024-001",
+		ExigenceTechnique: "Pose de carrelage antidérapant",
+		ReponseApportee:   "Utilisation de carrelage R11",
 		Gagne:             true,
 	}
 
-	err := repo.Ingest(context.Background(), archive)
+	err := repo.Ingest(context.Background(), reponse)
 	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Embedder was called with the technical requirement text
+	if emb.callCount != 1 {
+		t.Errorf("expected 1 embedding call, got %d", emb.callCount)
+	}
+	if emb.lastText != reponse.ExigenceTechnique {
+		t.Errorf("expected embedding text %q, got %q", reponse.ExigenceTechnique, emb.lastText)
+	}
+
+	// Upsert was called with the correct collection
+	if client.upsertCalledWith == nil {
+		t.Fatal("expected Upsert to have been called")
+	}
+	if client.upsertCalledWith.CollectionName != "test-collection" {
+		t.Errorf("expected collection test-collection, got %q", client.upsertCalledWith.CollectionName)
+	}
+
+	// Exactly one point was upserted
+	if len(client.upsertCalledWith.Points) != 1 {
+		t.Fatalf("expected 1 point, got %d", len(client.upsertCalledWith.Points))
+	}
+	point := client.upsertCalledWith.Points[0]
+
+	// Point ID matches the reponse ID
+	uuid, ok := point.Id.PointIdOptions.(*qdrant.PointId_Uuid)
+	if !ok {
+		t.Fatal("expected UUID point ID type")
+	}
+	if uuid.Uuid != "uuid-001" {
+		t.Errorf("expected point UUID uuid-001, got %q", uuid.Uuid)
+	}
+
+	// Payload contains ao_id, reponse_apportee, gagne
+	payload := point.Payload
+	if payload["ao_id"].GetStringValue() != "AO-2024-001" {
+		t.Errorf("payload ao_id mismatch: got %q", payload["ao_id"].GetStringValue())
+	}
+	if payload["reponse_apportee"].GetStringValue() != "Utilisation de carrelage R11" {
+		t.Errorf("payload reponse_apportee mismatch: got %q", payload["reponse_apportee"].GetStringValue())
+	}
+	if !payload["gagne"].GetBoolValue() {
+		t.Error("expected payload gagne=true")
 	}
 }
 
-func TestIngest_EmbedderError(t *testing.T) {
-	embedError := errors.New("embedding service unavailable")
-	embedder := &mockEmbedder{err: embedError}
+func TestIngestEmbedderError(t *testing.T) {
+	emb := &mockEmbedder{err: errors.New("model unavailable")}
 	client := &mockPointsClient{}
+	repo := newTestRepo(client, emb, "col")
 
-	repo := newTestRepo(embedder, client, "col")
-
-	err := repo.Ingest(context.Background(), domain.ReponseHistorique{ID: "uuid-002"})
+	err := repo.Ingest(context.Background(), domain.ReponseHistorique{ID: "x"})
 	if err == nil {
 		t.Fatal("expected error from embedder, got nil")
 	}
-	if !contains(err.Error(), "vectorization") {
-		t.Errorf("expected error to mention vectorization, got: %v", err)
+	if client.upsertCalledWith != nil {
+		t.Error("Upsert should not have been called when embedding fails")
 	}
 }
 
-func TestIngest_QdrantUpsertError(t *testing.T) {
-	embedder := &mockEmbedder{vector: []float32{0.5}}
-	upsertErr := errors.New("qdrant unavailable")
-	client := &mockPointsClient{upsertErr: upsertErr}
+func TestIngestUpsertError(t *testing.T) {
+	emb := &mockEmbedder{embedding: []float32{0.5}}
+	client := &mockPointsClient{upsertErr: errors.New("qdrant write failed")}
+	repo := newTestRepo(client, emb, "col")
 
-	repo := newTestRepo(embedder, client, "col")
-
-	err := repo.Ingest(context.Background(), domain.ReponseHistorique{ID: "uuid-003"})
+	err := repo.Ingest(context.Background(), domain.ReponseHistorique{ID: "y"})
 	if err == nil {
-		t.Fatal("expected error from upsert, got nil")
+		t.Fatal("expected Upsert error to be propagated, got nil")
 	}
-	if !contains(err.Error(), "inserting into Qdrant") {
-		t.Errorf("expected error to mention qdrant insert, got: %v", err)
+	if !containsStr(err.Error(), "qdrant write failed") {
+		t.Errorf("expected original error in message, got: %q", err.Error())
 	}
 }
 
-func TestIngest_GagneFieldStoredCorrectly(t *testing.T) {
-	// Ensure the Gagne field (bool) is passed through without being silently dropped.
-	// We verify indirectly: Ingest must not fail when Gagne is false.
-	embedder := &mockEmbedder{vector: []float32{0.1}}
-	client := &mockPointsClient{upsertResponse: &qdrant.PointsOperationResponse{}}
-	repo := newTestRepo(embedder, client, "col")
+func TestIngestVectorPassedToUpsert(t *testing.T) {
+	wantVec := []float32{0.11, 0.22, 0.33}
+	emb := &mockEmbedder{embedding: wantVec}
+	client := &mockPointsClient{}
+	repo := newTestRepo(client, emb, "col")
 
-	archive := domain.ReponseHistorique{
-		ID:    "uuid-004",
+	_ = repo.Ingest(context.Background(), domain.ReponseHistorique{ID: "z"})
+
+	if client.upsertCalledWith == nil {
+		t.Fatal("Upsert not called")
+	}
+	point := client.upsertCalledWith.Points[0]
+	vec := point.Vectors.GetVector().Data
+	if len(vec) != len(wantVec) {
+		t.Fatalf("expected vector length %d, got %d", len(wantVec), len(vec))
+	}
+	for i, v := range vec {
+		if v != wantVec[i] {
+			t.Errorf("vector[%d]: expected %f, got %f", i, wantVec[i], v)
+		}
+	}
+}
+
+func TestIngestGagneFalse(t *testing.T) {
+	emb := &mockEmbedder{embedding: []float32{0.1}}
+	client := &mockPointsClient{}
+	repo := newTestRepo(client, emb, "col")
+
+	err := repo.Ingest(context.Background(), domain.ReponseHistorique{
+		ID:    "rh-false",
 		Gagne: false,
-	}
-	err := repo.Ingest(context.Background(), archive)
-	if err != nil {
-		t.Fatalf("expected no error for Gagne=false, got: %v", err)
-	}
-}
-
-func TestIngest_EmptyVector(t *testing.T) {
-	// Edge case: embedder returns an empty vector; Qdrant call should still be attempted.
-	embedder := &mockEmbedder{vector: []float32{}}
-	client := &mockPointsClient{upsertResponse: &qdrant.PointsOperationResponse{}}
-	repo := newTestRepo(embedder, client, "col")
-
-	err := repo.Ingest(context.Background(), domain.ReponseHistorique{ID: "uuid-005"})
-	if err != nil {
-		t.Fatalf("expected no error for empty vector, got: %v", err)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// QdrantRepository.SearchSimilar tests
-// ---------------------------------------------------------------------------
-
-func makeSearchResponse(reponseApportee string, gagne bool, score float32) *qdrant.SearchResponse {
-	return &qdrant.SearchResponse{
-		Result: []*qdrant.ScoredPoint{
-			{
-				Score: score,
-				Payload: map[string]*qdrant.Value{
-					"reponse_apportee": {Kind: &qdrant.Value_StringValue{StringValue: reponseApportee}},
-					"gagne":            {Kind: &qdrant.Value_BoolValue{BoolValue: gagne}},
-				},
-			},
-		},
-	}
-}
-
-func TestSearchSimilar_Success(t *testing.T) {
-	embedder := &mockEmbedder{vector: []float32{0.1, 0.2}}
-	searchResp := makeSearchResponse("Carrelage grès cérame", true, 0.92)
-	client := &mockPointsClient{searchResponse: searchResp}
-
-	repo := newTestRepo(embedder, client, "col")
-
-	results, err := repo.SearchSimilar(context.Background(), "quel type de sol ?", 1)
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
-	if results[0].ReponseApportee != "Carrelage grès cérame" {
-		t.Errorf("expected ReponseApportee %q, got %q", "Carrelage grès cérame", results[0].ReponseApportee)
-	}
-	if !results[0].Gagne {
-		t.Errorf("expected Gagne true, got false")
-	}
-	if results[0].SimilarityScore != 0.92 {
-		t.Errorf("expected SimilarityScore 0.92, got %f", results[0].SimilarityScore)
+	payload := client.upsertCalledWith.Points[0].Payload
+	if payload["gagne"].GetBoolValue() {
+		t.Error("expected gagne=false in payload")
 	}
 }
 
-func TestSearchSimilar_EmbedderError(t *testing.T) {
-	embedder := &mockEmbedder{err: errors.New("embed failed")}
-	client := &mockPointsClient{}
+// ---------------------------------------------------------------------------
+// SearchSimilar tests
+// ---------------------------------------------------------------------------
 
-	repo := newTestRepo(embedder, client, "col")
-
-	_, err := repo.SearchSimilar(context.Background(), "query", 5)
-	if err == nil {
-		t.Fatal("expected error from embedder, got nil")
+func buildSearchResponse(items []struct {
+	reponse string
+	gagne   bool
+	score   float32
+}) *qdrant.SearchResponse {
+	hits := make([]*qdrant.ScoredPoint, len(items))
+	for i, item := range items {
+		hits[i] = &qdrant.ScoredPoint{
+			Score: item.score,
+			Payload: map[string]*qdrant.Value{
+				"reponse_apportee": {Kind: &qdrant.Value_StringValue{StringValue: item.reponse}},
+				"gagne":            {Kind: &qdrant.Value_BoolValue{BoolValue: item.gagne}},
+			},
+		}
 	}
-	if !contains(err.Error(), "vectorizing the request") {
-		t.Errorf("expected vectorization error message, got: %v", err)
-	}
+	return &qdrant.SearchResponse{Result: hits}
 }
 
-func TestSearchSimilar_QdrantSearchError(t *testing.T) {
-	embedder := &mockEmbedder{vector: []float32{0.1}}
-	searchErr := errors.New("qdrant search failed")
-	client := &mockPointsClient{searchErr: searchErr}
-
-	repo := newTestRepo(embedder, client, "col")
-
-	_, err := repo.SearchSimilar(context.Background(), "query", 3)
-	if err == nil {
-		t.Fatal("expected error from qdrant search, got nil")
-	}
-	if !contains(err.Error(), "searching for Vector Result") {
-		t.Errorf("expected qdrant search error message, got: %v", err)
-	}
-}
-
-func TestSearchSimilar_EmptyResults(t *testing.T) {
-	embedder := &mockEmbedder{vector: []float32{0.1}}
+func TestSearchSimilarSuccess(t *testing.T) {
+	emb := &mockEmbedder{embedding: []float32{0.9, 0.1}}
 	client := &mockPointsClient{
-		searchResponse: &qdrant.SearchResponse{Result: []*qdrant.ScoredPoint{}},
+		searchResult: buildSearchResponse([]struct {
+			reponse string
+			gagne   bool
+			score   float32
+		}{
+			{"Réponse A", true, 0.92},
+			{"Réponse B", false, 0.75},
+		}),
 	}
+	repo := newTestRepo(client, emb, "knowledge")
 
-	repo := newTestRepo(embedder, client, "col")
-
-	results, err := repo.SearchSimilar(context.Background(), "query", 5)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(results) != 0 {
-		t.Errorf("expected 0 results, got %d", len(results))
-	}
-}
-
-func TestSearchSimilar_MultipleResults(t *testing.T) {
-	embedder := &mockEmbedder{vector: []float32{0.3, 0.7}}
-	searchResp := &qdrant.SearchResponse{
-		Result: []*qdrant.ScoredPoint{
-			{
-				Score: 0.95,
-				Payload: map[string]*qdrant.Value{
-					"reponse_apportee": {Kind: &qdrant.Value_StringValue{StringValue: "first response"}},
-					"gagne":            {Kind: &qdrant.Value_BoolValue{BoolValue: true}},
-				},
-			},
-			{
-				Score: 0.80,
-				Payload: map[string]*qdrant.Value{
-					"reponse_apportee": {Kind: &qdrant.Value_StringValue{StringValue: "second response"}},
-					"gagne":            {Kind: &qdrant.Value_BoolValue{BoolValue: false}},
-				},
-			},
-		},
-	}
-	client := &mockPointsClient{searchResponse: searchResp}
-	repo := newTestRepo(embedder, client, "col")
-
-	results, err := repo.SearchSimilar(context.Background(), "multi query", 2)
+	results, err := repo.SearchSimilar(context.Background(), "nouvelle exigence", 2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
-	if results[0].ReponseApportee != "first response" {
-		t.Errorf("expected first result %q, got %q", "first response", results[0].ReponseApportee)
+
+	if results[0].ReponseApportee != "Réponse A" {
+		t.Errorf("first result ReponseApportee: got %q", results[0].ReponseApportee)
 	}
-	if results[1].ReponseApportee != "second response" {
-		t.Errorf("expected second result %q, got %q", "second response", results[1].ReponseApportee)
+	if results[0].SimilarityScore != 0.92 {
+		t.Errorf("first result score: expected 0.92, got %f", results[0].SimilarityScore)
 	}
-	if results[0].SimilarityScore != 0.95 {
-		t.Errorf("expected first score 0.95, got %f", results[0].SimilarityScore)
+	if !results[0].Gagne {
+		t.Error("first result Gagne should be true")
 	}
-	if results[1].SimilarityScore != 0.80 {
-		t.Errorf("expected second score 0.80, got %f", results[1].SimilarityScore)
+
+	if results[1].ReponseApportee != "Réponse B" {
+		t.Errorf("second result ReponseApportee: got %q", results[1].ReponseApportee)
+	}
+	if results[1].SimilarityScore != 0.75 {
+		t.Errorf("second result score: expected 0.75, got %f", results[1].SimilarityScore)
+	}
+	if results[1].Gagne {
+		t.Error("second result Gagne should be false")
 	}
 }
 
-func TestSearchSimilar_GagneFalseInResult(t *testing.T) {
-	embedder := &mockEmbedder{vector: []float32{0.1}}
-	searchResp := makeSearchResponse("response text", false, 0.6)
-	client := &mockPointsClient{searchResponse: searchResp}
-	repo := newTestRepo(embedder, client, "col")
+func TestSearchSimilarEmbedderError(t *testing.T) {
+	emb := &mockEmbedder{err: errors.New("embedding model offline")}
+	client := &mockPointsClient{}
+	repo := newTestRepo(client, emb, "col")
 
-	results, err := repo.SearchSimilar(context.Background(), "query", 1)
+	results, err := repo.SearchSimilar(context.Background(), "query", 5)
+	if err == nil {
+		t.Fatal("expected error from embedder, got nil")
+	}
+	if results != nil {
+		t.Errorf("expected nil results on error, got %v", results)
+	}
+	if client.searchCalledWith != nil {
+		t.Error("Search should not have been called when embedding fails")
+	}
+}
+
+func TestSearchSimilarQdrantError(t *testing.T) {
+	emb := &mockEmbedder{embedding: []float32{0.5}}
+	client := &mockPointsClient{searchErr: errors.New("qdrant read failed")}
+	repo := newTestRepo(client, emb, "col")
+
+	results, err := repo.SearchSimilar(context.Background(), "query", 3)
+	if err == nil {
+		t.Fatal("expected search error to propagate, got nil")
+	}
+	if results != nil {
+		t.Errorf("expected nil results on error, got %v", results)
+	}
+}
+
+func TestSearchSimilarSendsCorrectParameters(t *testing.T) {
+	wantVec := []float32{0.7, 0.3}
+	emb := &mockEmbedder{embedding: wantVec}
+	client := &mockPointsClient{}
+	repo := newTestRepo(client, emb, "my-collection")
+
+	_, _ = repo.SearchSimilar(context.Background(), "Poser du carrelage", 7)
+
+	if client.searchCalledWith == nil {
+		t.Fatal("Search was not called")
+	}
+	req := client.searchCalledWith
+	if req.CollectionName != "my-collection" {
+		t.Errorf("expected collection my-collection, got %q", req.CollectionName)
+	}
+	if req.Limit != 7 {
+		t.Errorf("expected limit 7, got %d", req.Limit)
+	}
+	if len(req.Vector) != len(wantVec) {
+		t.Fatalf("vector length mismatch: expected %d, got %d", len(wantVec), len(req.Vector))
+	}
+	for i, v := range req.Vector {
+		if v != wantVec[i] {
+			t.Errorf("vector[%d]: expected %f, got %f", i, wantVec[i], v)
+		}
+	}
+}
+
+func TestSearchSimilarEmptyResults(t *testing.T) {
+	emb := &mockEmbedder{embedding: []float32{0.1}}
+	client := &mockPointsClient{
+		searchResult: &qdrant.SearchResponse{Result: []*qdrant.ScoredPoint{}},
+	}
+	repo := newTestRepo(client, emb, "col")
+
+	results, err := repo.SearchSimilar(context.Background(), "no match query", 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
-	if results[0].Gagne {
-		t.Errorf("expected Gagne false, got true")
+	// Result should be nil or empty slice (no hits)
+	if len(results) != 0 {
+		t.Errorf("expected 0 results, got %d", len(results))
 	}
 }
 
-func TestSearchSimilar_ScoreAtBoundaries(t *testing.T) {
-	embedder := &mockEmbedder{vector: []float32{1.0}}
+func TestSearchSimilarPayloadEnabled(t *testing.T) {
+	emb := &mockEmbedder{embedding: []float32{0.1}}
+	client := &mockPointsClient{}
+	repo := newTestRepo(client, emb, "col")
 
-	for _, score := range []float32{0.0, 1.0} {
-		searchResp := makeSearchResponse("resp", true, score)
-		client := &mockPointsClient{searchResponse: searchResp}
-		repo := newTestRepo(embedder, client, "col")
+	_, _ = repo.SearchSimilar(context.Background(), "query", 1)
 
-		results, err := repo.SearchSimilar(context.Background(), "boundary test", 1)
-		if err != nil {
-			t.Fatalf("score %f: unexpected error: %v", score, err)
-		}
-		if results[0].SimilarityScore != score {
-			t.Errorf("score %f: expected %f, got %f", score, score, results[0].SimilarityScore)
-		}
+	req := client.searchCalledWith
+	if req == nil {
+		t.Fatal("Search was not called")
+	}
+	if req.WithPayload == nil {
+		t.Fatal("WithPayload selector not set")
+	}
+	enable, ok := req.WithPayload.SelectorOptions.(*qdrant.WithPayloadSelector_Enable)
+	if !ok {
+		t.Fatal("expected WithPayloadSelector_Enable type")
+	}
+	if !enable.Enable {
+		t.Error("expected payload to be enabled in search request")
+	}
+}
+
+func TestSearchSimilarEmbedderCalledWithQuery(t *testing.T) {
+	emb := &mockEmbedder{embedding: []float32{0.5}}
+	client := &mockPointsClient{}
+	repo := newTestRepo(client, emb, "col")
+
+	_, _ = repo.SearchSimilar(context.Background(), "recherche spécifique", 1)
+
+	if emb.lastText != "recherche spécifique" {
+		t.Errorf("expected embedder to be called with query text, got %q", emb.lastText)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// NewQdrantRepository
+// NewQdrantRepository constructor test
 // ---------------------------------------------------------------------------
 
-func TestNewQdrantRepository_ValidAddress(t *testing.T) {
-	embedder := &mockEmbedder{}
-	// grpc.NewClient is lazy — it does not actually connect at construction time,
-	// so a syntactically valid address should not return an error.
-	repo, err := NewQdrantRepository("localhost:6334", embedder, "my_collection")
+func TestNewQdrantRepositoryStoresFields(t *testing.T) {
+	// grpc.NewClient with a valid address should not fail (lazy connection).
+	emb := &mockEmbedder{}
+	repo, err := NewQdrantRepository("localhost:6334", emb, "my-col")
 	if err != nil {
-		t.Fatalf("expected no error for valid address, got: %v", err)
+		t.Fatalf("unexpected constructor error: %v", err)
 	}
-	if repo == nil {
-		t.Fatal("expected non-nil repository")
+	if repo.Collection != "my-col" {
+		t.Errorf("expected collection my-col, got %q", repo.Collection)
 	}
-	if repo.Collection != "my_collection" {
-		t.Errorf("expected collection %q, got %q", "my_collection", repo.Collection)
-	}
-	if repo.Embedder != embedder {
-		t.Error("expected embedder to be stored in repository")
+	if repo.Embedder != emb {
+		t.Error("expected embedder to be stored")
 	}
 	if repo.Client == nil {
-		t.Error("expected non-nil Qdrant client")
+		t.Error("expected non-nil qdrant client")
 	}
 }
 
@@ -424,7 +495,7 @@ func TestNewQdrantRepository_ValidAddress(t *testing.T) {
 // Helper
 // ---------------------------------------------------------------------------
 
-func contains(s, substr string) bool {
+func containsStr(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
 		func() bool {
 			for i := 0; i <= len(s)-len(substr); i++ {
