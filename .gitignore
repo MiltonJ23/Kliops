@@ -1,0 +1,8 @@
+/bin/ 
+/kliops-api 
+.env 
+go.work 
+go.sum 
+.idea/
+.vscode/ 
+*.swp
