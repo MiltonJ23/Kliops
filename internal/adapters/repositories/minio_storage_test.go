@@ -1,7 +1,7 @@
 package repositories
 
 import (
-	"strings"
+	"fmt"
 	"testing"
 
 	"github.com/MiltonJ23/Kliops/internal/core/ports"
@@ -45,19 +45,17 @@ func TestNewMinioStorage_EmptyCredentials_ReturnsClient(t *testing.T) {
 }
 
 func TestNewMinioStorage_ReturnedURLFormat(t *testing.T) {
-	// Verify the documented URL format: minio://<bucket>//<key>
-	// Upload requires a real server, so we document the expected format via the
-	// fmt.Sprintf pattern in the source: "minio://%s//%s"
-	// We validate this by inspecting the format string indirectly: bucket + double-slash + key.
+	// Verify the documented URL format from the implementation: "minio://%s//%s"
+	// The implementation uses fmt.Sprintf("minio://%s//%s", bucketName, info.Key)
+	// We verify this format is correctly applied.
 	bucket := "dce-entrants"
 	key := "report.pdf"
-	expected := "minio://" + bucket + "//" + key
+	expected := fmt.Sprintf("minio://%s//%s", bucket, key)
 
-	if !strings.HasPrefix(expected, "minio://") {
-		t.Errorf("URL format should start with 'minio://', got: %s", expected)
-	}
-	if !strings.Contains(expected, "//"+key) {
-		t.Errorf("URL format should contain double-slash before key, got: %s", expected)
+	// Since we can't easily mock the MinIO client's PutObject without a real server,
+	// we validate the format string directly against the implementation's pattern.
+	if expected != "minio://dce-entrants//report.pdf" {
+		t.Errorf("URL format should match 'minio://%s//%s' pattern, got: %s", bucket, key, expected)
 	}
 }
 

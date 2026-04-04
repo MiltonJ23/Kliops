@@ -9,7 +9,7 @@ require (
 	github.com/minio/minio-go/v7 v7.0.100
 	github.com/qdrant/go-client v1.17.1
 	github.com/xuri/excelize/v2 v2.10.1
-	google.golang.org/grpc v1.78.0
+	google.golang.org/grpc v1.80.0
 )
 
 require (

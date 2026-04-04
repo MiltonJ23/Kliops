@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -138,7 +139,11 @@ func TestERPPricing_GetPrice_TransportError_ReturnsError(t *testing.T) {
 
 func TestERPPricing_GetPrice_ContextCancelled_ReturnsError(t *testing.T) {
 	transport := &mockRoundTripper{
-		err: fmt.Errorf("context canceled"),
+		response: &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       jsonBody(map[string]float64{"prix": 99.0}),
+			Header:     make(http.Header),
+		},
 	}
 
 	erp := NewERPPricing("http://erp.example.com")
@@ -150,6 +155,9 @@ func TestERPPricing_GetPrice_ContextCancelled_ReturnsError(t *testing.T) {
 	_, err := erp.GetPrice(ctx, "ART01")
 	if err == nil {
 		t.Fatal("expected error for cancelled context, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled error, got: %v", err)
 	}
 }
 
@@ -186,7 +194,10 @@ func TestERPPricing_GetPrice_RequestPathContainsCode(t *testing.T) {
 	erp := NewERPPricing("http://erp.example.com")
 	erp.Client.Transport = transport
 
-	erp.GetPrice(context.Background(), "SPECIAL-CODE")
+	_, err := erp.GetPrice(context.Background(), "SPECIAL-CODE")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if transport.capturedReq == nil {
 		t.Fatal("no request was captured")
@@ -227,7 +238,10 @@ func TestERPPricing_GetPrice_RequestUsesGETMethod(t *testing.T) {
 	erp := NewERPPricing("http://erp.example.com")
 	erp.Client.Transport = transport
 
-	erp.GetPrice(context.Background(), "ART01")
+	_, err := erp.GetPrice(context.Background(), "ART01")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if transport.capturedReq == nil {
 		t.Fatal("no request was captured")
