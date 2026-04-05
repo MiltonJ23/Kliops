@@ -47,6 +47,7 @@ require (
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/posener/complete v1.2.3 // indirect
 	github.com/qdrant/go-client v1.17.1 // indirect
+	github.com/rabbitmq/amqp091-go v1.10.0 // indirect
 	github.com/richardlehane/mscfb v1.0.6 // indirect
 	github.com/richardlehane/msoleps v1.0.6 // indirect
 	github.com/rs/xid v1.6.0 // indirect
