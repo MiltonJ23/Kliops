@@ -43,9 +43,29 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: kliops_rabbitmq
+    environment:
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq 
+    healthcheck:
+      test: ["rabbitmq-diagnostics","-q","ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
      
 
 volumes:
   pgdata:
   qdrant_data:
   minio_data:
+  rabbitmq_data:
