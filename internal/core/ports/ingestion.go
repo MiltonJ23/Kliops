@@ -33,7 +33,7 @@ type IngestionRepository interface {
 	CheckProjectExists(ctx context.Context, externalID string) (bool, error)
 	CreateProject(ctx context.Context, p ProjectManifest) (string, error)
 	SaveDocument(ctx context.Context, projectId, docType, minioPath string) error
-	CreateJob(ctx context.Context, projectID string) error
+	CreateJob(ctx context.Context, projectID string) (string,error)
 	UpdateJobStatus(ctx context.Context, jobId string, status JobStatus, errMsg string) error
 	SaveReponseHistorique(ctx context.Context, projectID, exigence, reponse, qdrantID string) error
 }
