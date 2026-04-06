@@ -89,31 +89,57 @@ func (r *RabbitMQAdapter) PublishJob(ctx context.Context,jobID,projectID string)
 }
 
 
-func (r *RabbitMQAdapter) ConsumeJob(ctx context.Context, handler func(ctx context.Context,jobID,projectID string) error) error {
-	msgs, consumingMessageError := r.Channel.Consume(QueueName,"",false,false,false,false,nil)
-	if consumingMessageError != nil {
-		return fmt.Errorf("an error occured while consuming the message : %v",consumingMessageError)
+func (r *RabbitMQAdapter) ConsumeJob(ctx context.Context,maxConcurrency int, handler func(ctx context.Context, jobID, projectID string) error) error {
+	msgs, channelCreationError := r.Channel.Consume(QueueName,"",false,false,false,false,nil)
+	if channelCreationError != nil {
+		return fmt.Errorf("failed to consume from Queue : %v",channelCreationError)
 	}
+	
+	// This will work more likely like a worker pool
+	sem := make(chan struct {},maxConcurrency)
+
 	go func(){
 		for d := range msgs {
-			var msg JobMessage 
-			json.Unmarshal(d.Body,&msg)
+			// let's lock it if we reach maxConcurrency 
+		sem <- struct{}{}
 
-			handlingMessageError := handler(ctx,msg.JobID,msg.ProjectID)
-			if handlingMessageError != nil {
-				msg.Retry++ 
-				if msg.Retry > MaxRetries {
-					log.Printf("Job %s failed permanently. Moving to DLQ",msg.JobID)
-					d.Nack(false,false)
-				}else{
-					log.Printf("Job %s failed. Retry %d/%d",msg.JobID,msg.Retry,MaxRetries)
-					//TODO: Use RabbitMQ delayed Exchange here 
-					time.Sleep(time.Duration(msg.Retry*2) * time.Second)
-					d.Nack(false,true) // we requeue the Job
+		// let's launch the processing of a message in its own isolated  goroutiine 
+		go func (delivery amqp.Delivery){
+			defer func() {  <-sem }()
+
+				var msg JobMessage 
+				unmarshalingMessageError := json.Unmarshal(delivery.Body,&msg)
+				if unmarshalingMessageError != nil {
+					log.Printf("Unprocessable message format, dropping message : %v",unmarshalingMessageError)
+					delivery.Nack(false,false) // we send it directly to DLQ so that i can look at it after 
+					return 
 				}
-				continue
-			}
-			d.Ack(false)
+				handlingErr := handler(ctx,msg.JobID,msg.ProjectID)
+				if handlingErr != nil {
+					msg.Retry++ 
+					if msg.Retry > MaxRetries {
+						log.Printf("Job %s failed permanenlty after %d retries . Moving to DLQ.",msg.JobID,MaxRetries)
+						delivery.Nack(false,false)
+					} else {
+						log.Printf("Job %s failed (Attempt %d/%d). Requeueing ",msg.JobID,msg.Retry,MaxRetries)
+
+						go func(requeueMsg JobMessage) {
+							time.Sleep(time.Duration(requeueMsg.Retry * 5) * time.Second)
+
+							body, _ := json.Marshal(requeueMsg)
+							r.Channel.PublishWithContext(ctx,ExchangeName,"",false,false,amqp.Publishing{
+								ContentType: "application/json",
+								Body: body,
+								DeliveryMode: amqp.Persistent,
+							})
+
+							delivery.Ack(false)
+						} (msg)
+					}
+					return 
+				}
+				delivery.Ack(false)
+		}(d)
 		}
 	}()
 	return nil
