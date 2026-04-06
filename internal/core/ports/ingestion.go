@@ -36,13 +36,19 @@ type IngestionRepository interface {
 	CreateJob(ctx context.Context, projectID string) (string,error)
 	UpdateJobStatus(ctx context.Context, jobId string, status JobStatus, errMsg string) error
 	SaveReponseHistorique(ctx context.Context, projectID, exigence, reponse, qdrantID string) error
+	GetDocumentPath(ctx context.Context,projectID,docType string) (string,error)
 }
 
 type MessageQueue interface {
 	PublishJob(ctx context.Context, jobID, projectID string) error
-	ConsumeJob(ctx context.Context, handler func(ctx context.Context, jobID, projectID string) error) error
+	ConsumeJob(ctx context.Context,maxConcurrency int, handler func(ctx context.Context, jobID, projectID string) error) error
 }
 
 type LLMExtractor interface {
 	ExtractRequirementsAndAnswers(ctx context.Context, dceText, memoireText string) ([]ExtractedPair, error)
+}
+
+
+type DocumentParser interface {
+	FetchAndParse(ctx context.Context,minioPath string) (string,error)
 }
