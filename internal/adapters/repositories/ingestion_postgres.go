@@ -43,7 +43,7 @@ func (r *IngestionPostgres) ExecuteTx(ctx context.Context, fn func(txRepo ports.
 	trsError := fn(txRepo) 
 	if trsError != nil {
 		rollbackErr := tx.Rollback(ctx)
-		if rollbackErr != nil && errors.Is(rollbackErr,pgx.ErrTxClosed) {
+		if rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
 				return fmt.Errorf("tx error: %v , rollback error : %v",trsError,rollbackErr)
 		}
 		return trsError
@@ -54,7 +54,7 @@ func (r *IngestionPostgres) ExecuteTx(ctx context.Context, fn func(txRepo ports.
 func (r *IngestionPostgres) CheckProjectExists(ctx context.Context, externalID string) (bool, error) {
 	var exists bool 
 	query := `SELECT EXISTS(SELECT 1 from appels_offres WHERE external_id=$1)`
-	executingQueryError := r.DB.QueryRow(ctx,query,externalID).Scan(exists)
+	executingQueryError := r.DB.QueryRow(ctx,query,externalID).Scan(&exists)
 
 	return exists, executingQueryError
 }
@@ -96,19 +96,19 @@ func (r *IngestionPostgres) UpdateJobStatus(ctx context.Context, jobId string, s
 	query := `
 		UPDATE processing_jobs 
 		SET status = $1, error_message = $2, updated_at=NOW()
-		WHERE id=$4
+		WHERE id=$3
 	`
 	_, updateJobStatusError := r.DB.Exec(ctx,query,status,errMsg,jobId)
 	return updateJobStatusError
 }
 
-func (r *IngestionPostgres) SaveReponseHistorique(ctx context.Context, projectID, exigence, reponse, qdrantID string) error {
+func (r *IngestionPostgres) SaveResponseHistory(ctx context.Context, projectID, exigence, response, qdrantID string) error {
 	query := `
 		INSERT INTO reponses_historiques (appel_offre_id,exigence_technique,reponse_apportee,qdrant_point_id)
 		VALUES ($1,$2,$3,$4)
 	`
-	_,savingReponseHistoriqueError := r.DB.Exec(ctx,query,projectID,exigence,reponse,qdrantID)
-	return savingReponseHistoriqueError
+	_,savingResponseHistoryError := r.DB.Exec(ctx,query,projectID,exigence,response,qdrantID)
+	return savingResponseHistoryError
 }
 
 func (r *IngestionPostgres) GetDocumentPath(ctx context.Context,projectID,docType string) (string,error) {
@@ -119,7 +119,7 @@ func (r *IngestionPostgres) GetDocumentPath(ctx context.Context,projectID,docTyp
 
 	if executingFetchDocumentError != nil {
 			if errors.Is(executingFetchDocumentError,pgx.ErrNoRows){
-					return "", fmt.Errorf("")
+					return "", fmt.Errorf("document not found for project %s with type %s", projectID, docType)
 			}
 			return "",executingFetchDocumentError
 	}

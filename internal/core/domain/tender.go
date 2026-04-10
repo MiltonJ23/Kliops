@@ -8,9 +8,8 @@ type AppelOffre struct {
 	Titre                  string
 	MaitreDouvrage         string
 	DateLimite             time.Time
-	RegelementConsultation string
-	CCTP                   string // Specifications of Special Technical Clauses
 	ReglementConsultation  string
+	CCTP                   string // Specifications of Special Technical Clauses
 	BPU_DPGF               string // Price Schedule or Price Breakdown
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -19,8 +20,9 @@ const (
 )
 
 type RabbitMQAdapter struct {
-	Conn *amqp.Connection 
-	Channel *amqp.Channel
+	Conn      *amqp.Connection 
+	Channel   *amqp.Channel
+	PublishMu sync.Mutex
 }
 
 type JobMessage struct {
@@ -37,20 +39,27 @@ func NewRabbitMQAdapter(amqpUri string) (*RabbitMQAdapter,error) {
 
 	ch, channelCreationError := conn.Channel()
 	if channelCreationError != nil {
+		conn.Close()
 		return nil, fmt.Errorf("failed to establish a new channel on top of the established connection : %v",channelCreationError)
 	}
 
 	// let's setup the DLQ 
 	dlqExchangeDeclarationError := ch.ExchangeDeclare(DLQExchange,"direct",true, false,false,false,nil)
 	if dlqExchangeDeclarationError != nil {
+		ch.Close()
+		conn.Close()
 		return nil, fmt.Errorf("failed to create the exchange %s, an error occured : %v",DLQExchange,dlqExchangeDeclarationError)
 	}
 	_,dqlQueueDeclarationError := ch.QueueDeclare(DLQQueue,true,false,false,false,nil)
 	if dqlQueueDeclarationError != nil {
+		ch.Close()
+		conn.Close()
 		return nil, fmt.Errorf("failed to create the dlq queue %s , an error occured : %v",DLQQueue,dqlQueueDeclarationError)
 	}
 	bindingDlqQueueAndExchangeError := ch.QueueBind(DLQQueue,"",DLQExchange,false,nil)
 	if bindingDlqQueueAndExchangeError != nil {
+		ch.Close()
+		conn.Close()
 		return nil,fmt.Errorf("failed to bind the Queue %s to the exchange %s , an error occured : %v",DLQQueue,DLQExchange,bindingDlqQueueAndExchangeError)
 	}
 
@@ -60,18 +69,38 @@ func NewRabbitMQAdapter(amqpUri string) (*RabbitMQAdapter,error) {
 	}
 	mainExchangeDeclarationError := ch.ExchangeDeclare(ExchangeName,"direct",true,false,false,false,nil)
 	if mainExchangeDeclarationError != nil {
+		ch.Close()
+		conn.Close()
 		return nil, fmt.Errorf("failed to create the exchange %s, an error occured : %v",ExchangeName,mainExchangeDeclarationError)
 	}
 	_,mainQueueDeclarationError := ch.QueueDeclare(QueueName,true,false,false,false,args)
 	if mainQueueDeclarationError != nil {
-		return nil, fmt.Errorf("failed to create the dlq queue %s , an error occured : %v",QueueName,mainQueueDeclarationError)
+		ch.Close()
+		conn.Close()
+		return nil, fmt.Errorf("failed to create the main queue %s , an error occured : %v",QueueName,mainQueueDeclarationError)
 	}
 	bindingQueueAndExchangeError := ch.QueueBind(QueueName,"",ExchangeName,false,nil)
 	if bindingQueueAndExchangeError != nil {
+		ch.Close()
+		conn.Close()
 		return nil,fmt.Errorf("failed to bind the Queue %s to the exchange %s , an error occured : %v",QueueName,ExchangeName,bindingQueueAndExchangeError)
 	}
 
 	return &RabbitMQAdapter{Conn:conn,Channel:ch,},nil
+}
+
+func (r *RabbitMQAdapter) Close() error {
+	if r.Channel != nil {
+		if err := r.Channel.Close(); err != nil {
+			return fmt.Errorf("failed to close channel: %w", err)
+		}
+	}
+	if r.Conn != nil {
+		if err := r.Conn.Close(); err != nil {
+			return fmt.Errorf("failed to close connection: %w", err)
+		}
+	}
+	return nil
 }
 
 func (r *RabbitMQAdapter) PublishJob(ctx context.Context,jobID,projectID string) error {
@@ -81,6 +110,9 @@ func (r *RabbitMQAdapter) PublishJob(ctx context.Context,jobID,projectID string)
 		return fmt.Errorf("an error happened while marshalling the Job: %s , to be published over rabbitmq: %v ",jobID,marshallingbodyError)
 	}
 
+	r.PublishMu.Lock()
+	defer r.PublishMu.Unlock()
+	
 	return r.Channel.PublishWithContext(ctx,ExchangeName,"",false,false,amqp.Publishing{
 		ContentType: "application/json",
 		Body:	body,
@@ -99,47 +131,80 @@ func (r *RabbitMQAdapter) ConsumeJob(ctx context.Context,maxConcurrency int, han
 	sem := make(chan struct {},maxConcurrency)
 
 	go func(){
-		for d := range msgs {
-			// let's lock it if we reach maxConcurrency 
-		sem <- struct{}{}
-
-		// let's launch the processing of a message in its own isolated  goroutiine 
-		go func (delivery amqp.Delivery){
-			defer func() {  <-sem }()
-
-				var msg JobMessage 
-				unmarshalingMessageError := json.Unmarshal(delivery.Body,&msg)
-				if unmarshalingMessageError != nil {
-					log.Printf("Unprocessable message format, dropping message : %v",unmarshalingMessageError)
-					delivery.Nack(false,false) // we send it directly to DLQ so that i can look at it after 
-					return 
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case d, ok := <-msgs:
+				if !ok {
+					return
 				}
-				handlingErr := handler(ctx,msg.JobID,msg.ProjectID)
-				if handlingErr != nil {
-					msg.Retry++ 
-					if msg.Retry > MaxRetries {
-						log.Printf("Job %s failed permanenlty after %d retries . Moving to DLQ.",msg.JobID,MaxRetries)
-						delivery.Nack(false,false)
-					} else {
-						log.Printf("Job %s failed (Attempt %d/%d). Requeueing ",msg.JobID,msg.Retry,MaxRetries)
+				// let's lock it if we reach maxConcurrency 
+				sem <- struct{}{}
 
-						go func(requeueMsg JobMessage) {
-							time.Sleep(time.Duration(requeueMsg.Retry * 5) * time.Second)
+				// let's launch the processing of a message in its own isolated goroutine 
+				go func (delivery amqp.Delivery){
+					defer func() {  <-sem }()
 
-							body, _ := json.Marshal(requeueMsg)
-							r.Channel.PublishWithContext(ctx,ExchangeName,"",false,false,amqp.Publishing{
+					// Check context before processing
+					if ctx.Err() != nil {
+						delivery.Nack(true, false) // Requeue
+						return
+					}
+
+					var msg JobMessage 
+					unmarshalingMessageError := json.Unmarshal(delivery.Body,&msg)
+					if unmarshalingMessageError != nil {
+						log.Printf("Unprocessable message format, dropping message : %v",unmarshalingMessageError)
+						delivery.Nack(false,false) // we send it directly to DLQ so that i can look at it after 
+						return 
+					}
+					handlingErr := handler(ctx,msg.JobID,msg.ProjectID)
+					if handlingErr != nil {
+						msg.Retry++ 
+						if msg.Retry > MaxRetries {
+							log.Printf("Job %s failed permanently after %d retries . Moving to DLQ.",msg.JobID,MaxRetries)
+							delivery.Nack(false,false)
+						} else {
+							log.Printf("Job %s failed (Attempt %d/%d). Requeueing ",msg.JobID,msg.Retry,MaxRetries)
+
+							// Perform retry synchronously instead of in a nested goroutine
+							time.Sleep(time.Duration(msg.Retry * 5) * time.Second)
+
+							// Check context before retrying
+							if ctx.Err() != nil {
+								delivery.Nack(true, false) // Requeue on context cancellation
+								return
+							}
+
+							body, marshalErr := json.Marshal(msg)
+							if marshalErr != nil {
+								log.Printf("Error marshalling retry message: %v", marshalErr)
+								delivery.Nack(false, false)
+								return
+							}
+
+							r.PublishMu.Lock()
+							publishErr := r.Channel.PublishWithContext(ctx,ExchangeName,"",false,false,amqp.Publishing{
 								ContentType: "application/json",
 								Body: body,
 								DeliveryMode: amqp.Persistent,
 							})
+							r.PublishMu.Unlock()
+
+							if publishErr != nil {
+								log.Printf("Error publishing retry message: %v", publishErr)
+								delivery.Nack(true, false) // Requeue
+								return
+							}
 
 							delivery.Ack(false)
-						} (msg)
+						}
+						return 
 					}
-					return 
-				}
-				delivery.Ack(false)
-		}(d)
+					delivery.Ack(false)
+				}(d)
+			}
 		}
 	}()
 	return nil

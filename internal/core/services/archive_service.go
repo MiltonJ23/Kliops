@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
+	"log"
 	"mime/multipart"
 	"io"
 	"path/filepath"
@@ -50,7 +51,7 @@ func (s *ArchiveService) ProcessZipArchive(ctx context.Context,file multipart.Fi
 	}
 	//TODO: make sure to use os.File rather than multipart for zip files of more than 500 MB to avoid clogging up the RAM
 
-	zipReader,openingNewZipReaderError := zip.NewReader(bytes.NewReader(zipData),size)
+	zipReader,openingNewZipReaderError := zip.NewReader(bytes.NewReader(zipData),int64(len(zipData)))
 	if openingNewZipReaderError != nil {
 		return fmt.Errorf("an error occured while trying to open a new zip reader : %v",openingNewZipReaderError)
 	}
@@ -83,22 +84,34 @@ func (s *ArchiveService) ProcessZipArchive(ctx context.Context,file multipart.Fi
 
 	for i, record := range records {
 		if i == 0 {
-			continue // we skip since it is the header s
+			continue // we skip since it is the header
+		}
+
+		// Validate record has expected columns
+		if len(record) < 6 {
+			log.Printf("Skipping malformed CSV row: expected at least 6 columns, got %d", len(record))
+			continue
 		}
 
 		manifest := ports.ProjectManifest{
 			ExternalID:record[0],Titre:record[1],Client:record[2],Status:record[3],FichierDCE:record[4],FichierMEM:record[5],
 		}
 		// let's check if the project doesn't exist already 
-		exists, _ := s.Repo.CheckProjectExists(ctx,manifest.ExternalID)
+		exists, checkErr := s.Repo.CheckProjectExists(ctx,manifest.ExternalID)
+		if checkErr != nil {
+			log.Printf("Error checking project existence: %v", checkErr)
+			continue
+		}
 		if exists {
 			continue 
 		}
 
 		// Now let's launch a new Transaction 
+		var jobID, projID string
 		transactionError := s.Repo.ExecuteTx(ctx, func(txRepo ports.IngestionRepository)error {
 			// we first create the project 
-			projID, projectCreationError := txRepo.CreateProject(ctx,manifest)
+			var projectCreationError error
+			projID, projectCreationError = txRepo.CreateProject(ctx,manifest)
 			if projectCreationError != nil {
 				return fmt.Errorf("an error occured while trying to create a new project from the manifest")
 			}
@@ -110,15 +123,21 @@ func (s *ArchiveService) ProcessZipArchive(ctx context.Context,file multipart.Fi
 			}
 
 			// we then create the Job 
-			jobID,jobCreationError := txRepo.CreateJob(ctx,projID)
+			var jobCreationError error
+			jobID, jobCreationError = txRepo.CreateJob(ctx,projID)
 			if jobCreationError != nil {
 				return fmt.Errorf("an error occured while trying to create a new job")
 			}
-			// we then publish it into rabbitmq 
-			return s.Queue.PublishJob(ctx,jobID,projID)
+			return nil
 		})
 		if transactionError != nil {
 			return fmt.Errorf("Failed to process project %s:%v\n",manifest.ExternalID,transactionError)
+		}
+		
+		// Publish the job after the transaction succeeds
+		if publishErr := s.Queue.PublishJob(ctx,jobID,projID); publishErr != nil {
+			log.Printf("Error publishing job %s for project %s: %v", jobID, projID, publishErr)
+			// Log but don't fail the whole process as the job is already in the DB
 		}
 	}
 	return nil

@@ -15,10 +15,10 @@ type SearchResult struct {
 // KnowledgeBase is the contract the vector base is supposed to honour
 type KnowledgeBase interface {
 
-	// Ingest save a new ReponseHistorique in the knowledge base
+	// Ingest saves a new ReponseHistorique in the knowledge base
 	Ingest(ctx context.Context, reponse domain.ReponseHistorique) error
 
-	// SearchSimilar search for past response based on a new CCTP requirement
+	// SearchSimilar searches for past responses based on a new CCTP requirement
 	SearchSimilar(ctx context.Context, nouvelleExigence string, limit int) ([]SearchResult, error)
 }
 

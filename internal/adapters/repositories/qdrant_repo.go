@@ -11,8 +11,9 @@ import (
 )
 
 type QdrantRepository struct {
-	Client qdrant.PointsClient 
-	Embedder ports.Embedder 
+	Client     qdrant.PointsClient 
+	Conn       *grpc.ClientConn
+	Embedder   ports.Embedder 
 	Collection string 
 }
 
@@ -28,9 +29,17 @@ func NewQdrantRepository(qdrantAddr string, embedder ports.Embedder, collectionN
 
 	return &QdrantRepository{
 		Client: client,
+		Conn: conn,
 		Embedder: embedder,
 		Collection: collectionName,
 	},nil
+}
+
+func (r *QdrantRepository) Close() error {
+	if r.Conn != nil {
+		return r.Conn.Close()
+	}
+	return nil
 }
 
 // Ingest will vectorize the new requirement and save the response in Qdrant
@@ -45,6 +54,7 @@ func (r *QdrantRepository) Ingest(ctx context.Context, reponse domain.ReponseHis
 		"ao_id": {Kind:&qdrant.Value_StringValue{StringValue: reponse.AppelOffreID}},
 		"reponse_apportee" : {Kind: &qdrant.Value_StringValue{StringValue: reponse.ReponseApportee}},
 		"gagne" : {Kind: &qdrant.Value_BoolValue{BoolValue: reponse.Gagne}},
+		"exigence_technique" : {Kind: &qdrant.Value_StringValue{StringValue: reponse.ExigenceTechnique}},
 	}
 
 	//now let's try to insert that into qdrant 
@@ -70,6 +80,11 @@ func (r *QdrantRepository) Ingest(ctx context.Context, reponse domain.ReponseHis
 
 
 func (r *QdrantRepository) SearchSimilar(ctx context.Context, nouvelleExigence string, limit int) ([]ports.SearchResult,error) {
+	// Validate limit parameter
+	if limit <= 0 {
+		return nil, fmt.Errorf("limit must be positive, got %d", limit)
+	}
+	
 	// first of all , let's vectorize the request 
 	queryVector, queryVectorizationError := r.Embedder.CreateEmbedding(ctx,nouvelleExigence)
 	if queryVectorizationError != nil {
@@ -93,10 +108,27 @@ func (r *QdrantRepository) SearchSimilar(ctx context.Context, nouvelleExigence s
 	for _,hit := range searchResult.Result{
 		payload := hit.Payload 
 
+		// Safely extract payload values with nil checks
+		aoID := ""
+		if payload != nil && payload["ao_id"] != nil {
+			aoID = payload["ao_id"].GetStringValue()
+		}
+
+		reponseApportee := ""
+		if payload != nil && payload["reponse_apportee"] != nil {
+			reponseApportee = payload["reponse_apportee"].GetStringValue()
+		}
+
+		gagne := false
+		if payload != nil && payload["gagne"] != nil {
+			gagne = payload["gagne"].GetBoolValue()
+		}
+
 		results = append(results,ports.SearchResult{
 			ReponseHistorique: domain.ReponseHistorique{
-				ReponseApportee: payload["reponse_apportee"].GetStringValue(),
-				Gagne: payload["gagne"].GetBoolValue(),
+				AppelOffreID:    aoID,
+				ReponseApportee: reponseApportee,
+				Gagne:           gagne,
 			},
 			SimilarityScore: hit.Score,
 		})

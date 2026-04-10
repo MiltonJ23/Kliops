@@ -46,6 +46,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Échec de la recherche: %v", err)
 	}
+	
+	if len(resultats) == 0 {
+		log.Println("No similar responses found in knowledge base")
+		return
+	}
 
 	fmt.Printf("\n--- RESULT OF THE RAG (Similarity Score: %f) ---\n", resultats[0].SimilarityScore)
 	fmt.Printf("Réponse historique found :\n%s\n", resultats[0].ReponseApportee)

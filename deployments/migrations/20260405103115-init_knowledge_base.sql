@@ -17,14 +17,20 @@ CREATE TABLE documents (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+CREATE INDEX idx_documents_appel_offre_id ON documents(appel_offre_id);
+
 CREATE TABLE processing_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     appel_offre_id UUID NOT NULL REFERENCES appels_offres(id) ON DELETE CASCADE,
     status VARCHAR(50) NOT NULL CHECK (status IN ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED')),
     error_message TEXT,
     retry_count INT DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+CREATE INDEX idx_processing_jobs_appel_offre_id ON processing_jobs(appel_offre_id);
+CREATE INDEX idx_processing_jobs_status ON processing_jobs(status);
 
 CREATE TABLE reponses_historiques (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -34,6 +40,8 @@ CREATE TABLE reponses_historiques (
     qdrant_point_id UUID NOT NULL UNIQUE, -- Lien exact avec la DB Vectorielle
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+CREATE INDEX idx_reponses_historiques_appel_offre_id ON reponses_historiques(appel_offre_id);
 -- +migrate Down
 DROP TABLE reponses_historiques;
 DROP TABLE processing_jobs;

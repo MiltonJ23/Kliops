@@ -32,7 +32,7 @@ func (e *ExcelPricing) GetPrice(ctx context.Context, codeArticle string) (float6
 		if len(row) >= 2 && row[0] == codeArticle {
 			price, parsePriceError := strconv.ParseFloat(row[1],64)
 			if parsePriceError != nil {
-				return 0,fmt.Errorf("price format is invalid for %s : %v",codeArticle,parsePriceError)
+				return 0,fmt.Errorf("price format is invalid for %s : %w",codeArticle,parsePriceError)
 			}
 			return price, nil
 		}

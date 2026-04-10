@@ -28,7 +28,7 @@ services:
 
   minio:
     image: minio/minio:latest 
-    container_name: kliops_minio
+    container_name: kliops-minio
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -47,7 +47,8 @@ services:
 
   rabbitmq:
     image: rabbitmq:4-management
-    container_name: kliops_rabbitmq
+    container_name: kliops-rabbitmq
+    hostname: rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}

@@ -32,23 +32,21 @@ type IngestionRepository interface {
 	ExecuteTx(ctx context.Context, fn func(txRepo IngestionRepository) error) error
 	CheckProjectExists(ctx context.Context, externalID string) (bool, error)
 	CreateProject(ctx context.Context, p ProjectManifest) (string, error)
-	SaveDocument(ctx context.Context, projectId, docType, minioPath string) error
-	CreateJob(ctx context.Context, projectID string) (string,error)
-	UpdateJobStatus(ctx context.Context, jobId string, status JobStatus, errMsg string) error
-	SaveReponseHistorique(ctx context.Context, projectID, exigence, reponse, qdrantID string) error
-	GetDocumentPath(ctx context.Context,projectID,docType string) (string,error)
+	SaveDocument(ctx context.Context, projectID, docType, minioPath string) error
+	CreateJob(ctx context.Context, projectID string) (string, error)
+	UpdateJobStatus(ctx context.Context, jobID string, status JobStatus, errMsg string) error
+	SaveResponseHistory(ctx context.Context, projectID, exigence, response, qdrantID string) error
+	GetDocumentPath(ctx context.Context, projectID, docType string) (string, error)
 }
 
 type MessageQueue interface {
 	PublishJob(ctx context.Context, jobID, projectID string) error
-	ConsumeJob(ctx context.Context,maxConcurrency int, handler func(ctx context.Context, jobID, projectID string) error) error
+	ConsumeJob(ctx context.Context, maxConcurrency int, handler func(ctx context.Context, jobID, projectID string) error) error
 }
 
 type LLMExtractor interface {
 	ExtractRequirementsAndAnswers(ctx context.Context, dceText, memoireText string) ([]ExtractedPair, error)
 }
-
-
 type DocumentParser interface {
-	FetchAndParse(ctx context.Context,minioPath string) (string,error)
+	FetchAndParse(ctx context.Context, minioPath string) (string, error)
 }
