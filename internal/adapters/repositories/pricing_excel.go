@@ -23,12 +23,22 @@ func (e *ExcelPricing) GetPrice(ctx context.Context, codeArticle string) (float6
 	defer f.Close()
 
 	// we admit the sheet is called "Prix", it holds the columns Column A = Code and Column B = Prix 
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	default:
+	}
 	rows, readRowsError := f.GetRows("Prix")
 	if readRowsError != nil {
 		return 0, fmt.Errorf("unable to parse the excel file Rows: %w",readRowsError)
 	}
 
 	for _,row := range rows {
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		default:
+		}
 		if len(row) >= 2 && row[0] == codeArticle {
 			price, parsePriceError := strconv.ParseFloat(row[1],64)
 			if parsePriceError != nil {

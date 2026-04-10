@@ -34,7 +34,7 @@ var _ ports.IngestionRepository = (*IngestionPostgres)(nil)
 func (r *IngestionPostgres) ExecuteTx(ctx context.Context, fn func(txRepo ports.IngestionRepository) error) error {
 	tx, transactionBeginError := r.DB.Begin(ctx)
 	if transactionBeginError != nil {
-		return fmt.Errorf("failed to begin a new transaction: %v",transactionBeginError)
+		return fmt.Errorf("failed to begin a new transaction: %w",transactionBeginError)
 	}
 
 	// we create a new instance of the repository that is going to use the transaction rather than the pool 
@@ -44,7 +44,7 @@ func (r *IngestionPostgres) ExecuteTx(ctx context.Context, fn func(txRepo ports.
 	if trsError != nil {
 		rollbackErr := tx.Rollback(ctx)
 		if rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-				return fmt.Errorf("tx error: %v , rollback error : %v",trsError,rollbackErr)
+				return fmt.Errorf("tx error: %w , rollback error : %v",trsError,rollbackErr)
 		}
 		return trsError
 	}
@@ -67,7 +67,7 @@ func (r *IngestionPostgres) CreateProject(ctx context.Context, p ports.ProjectMa
 	`
 	executingQueryError := r.DB.QueryRow(ctx,query,p.ExternalID,p.Titre,p.Client,p.Status).Scan(&id)
 	if executingQueryError != nil {
-		return " ", fmt.Errorf("failed to create project %s , an error occured: %v",p.ExternalID,executingQueryError)
+		return "", fmt.Errorf("failed to create project %s , an error occured: %v",p.ExternalID,executingQueryError)
 	}
 	
 	return id,nil

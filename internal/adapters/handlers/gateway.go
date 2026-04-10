@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"path/filepath"
+	"strings"
+
 	"github.com/MiltonJ23/Kliops/internal/core/ports"
 	"github.com/MiltonJ23/Kliops/internal/core/services"
 )
@@ -37,8 +40,15 @@ func (h *GatewayHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
+	// Sanitize filename to prevent path traversal
+	filename := filepath.Base(header.Filename)
+	if strings.Contains(filename, "..") || len(filename) > 255 || strings.ContainsAny(filename, "/\\") {
+		http.Error(w, "invalid filename", http.StatusBadRequest)
+		return
+	}
+
 	// let's upload the file to MiniO 
-	path, uploadingFileError := h.Storage.Upload(r.Context(),"dce-entrants",header.Filename,file,header.Size,header.Header.Get("content-type"))
+	path, uploadingFileError := h.Storage.Upload(r.Context(),"dce-entrants",filename,file,header.Size,header.Header.Get("content-type"))
 	if uploadingFileError != nil {
 		log.Printf("Error uploading file: %v", uploadingFileError)
 		http.Error(w,"failed to upload file",http.StatusInternalServerError)
@@ -56,7 +66,7 @@ func (h *GatewayHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *GatewayHandler) HandlePrice(w http.ResponseWriter, r *http.Request) {
-	source := r.URL.Query().Get("source") // ex: excel or portgres 
+	source := r.URL.Query().Get("source") // ex: excel or postgres 
 	code := r.URL.Query().Get("code")
 
 	if source == "" || code == "" {

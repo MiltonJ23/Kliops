@@ -10,13 +10,13 @@ import (
 
 // PricingService is the orchestrator of the mercuriale 
 type PricingService struct {
-	Strategies map[string]ports.PricingStrategy
+	strategies map[string]ports.PricingStrategy
 	mu         sync.RWMutex
 }
 
 func NewPricingService() *PricingService {
 	return &PricingService{
-		Strategies: make(map[string]ports.PricingStrategy),
+		strategies: make(map[string]ports.PricingStrategy),
 	}
 }
 
@@ -29,13 +29,13 @@ func (s *PricingService) RegisterStrategy(name string, strategy ports.PricingStr
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.Strategies[name] = strategy
+	s.strategies[name] = strategy
 }
 
 
 func (s *PricingService) GetPrice(ctx context.Context, source string, codeArticle string) (float64,error) {
 	s.mu.RLock()
-	strategy, exists := s.Strategies[source]
+	strategy, exists := s.strategies[source]
 	s.mu.RUnlock()
 	
 	if !exists {

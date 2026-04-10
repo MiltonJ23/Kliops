@@ -29,16 +29,17 @@ func NewMinioStorage(endPoint, accessKey,secretKey string ,useSSL bool) (*MinioS
 
 func (m *MinioStorage) Upload(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, contentType string) (string,error) {
 	// let's first of all check if the bucket exist 
-	exists, checkExistenceError := m.Client.BucketExists(ctx,bucketName)
-	if checkExistenceError != nil {
-		return "", fmt.Errorf("failed to check if bucket %s exists: %w", bucketName, checkExistenceError)
-	}
-	
-	if !exists {
-		bucketCreationError := m.Client.MakeBucket(ctx,bucketName,minio.MakeBucketOptions{})
-		if bucketCreationError != nil {
-			return "",fmt.Errorf("failed to create the bucket %s, an error occured : %v",bucketName,bucketCreationError)
+	bucketCreationError := m.Client.MakeBucket(ctx,bucketName,minio.MakeBucketOptions{})
+	if bucketCreationError != nil {
+		exists, checkExistenceError := m.Client.BucketExists(ctx,bucketName)
+		if checkExistenceError != nil {
+			return "", fmt.Errorf("failed to create bucket %s and failed to check existence: %w", bucketName, checkExistenceError)
 		}
+		if !exists {
+			return "", fmt.Errorf("failed to create bucket %s: %w", bucketName, bucketCreationError)
+		}
+		// else, bucket exists, proceed
+	} else {
 		log.Printf("Bucket %s created successfully ",bucketName)
 	}
 
@@ -50,4 +51,9 @@ func (m *MinioStorage) Upload(ctx context.Context, bucketName, objectName string
 		return "",fmt.Errorf("failed to upload %s in miniO : %v",objectName,uploadingError)
 	}
 	return fmt.Sprintf("minio://%s/%s",bucketName,info.Key),nil
+}
+
+func (m *MinioStorage) Delete(ctx context.Context, bucketName, objectName string) error {
+	err := m.Client.RemoveObject(ctx, bucketName, objectName, minio.RemoveObjectOptions{})
+	return err
 }

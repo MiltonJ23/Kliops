@@ -30,6 +30,7 @@ require (
 	github.com/richardlehane/mscfb v1.0.6 // indirect
 	github.com/richardlehane/msoleps v1.0.6 // indirect
 	github.com/rs/xid v1.6.0 // indirect
+	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/tiendc/go-deepcopy v1.7.2 // indirect
 	github.com/tinylib/msgp v1.6.1 // indirect
 	github.com/xuri/efp v0.0.1 // indirect

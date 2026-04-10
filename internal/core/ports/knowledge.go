@@ -20,6 +20,9 @@ type KnowledgeBase interface {
 
 	// SearchSimilar searches for past responses based on a new CCTP requirement
 	SearchSimilar(ctx context.Context, nouvelleExigence string, limit int) ([]SearchResult, error)
+
+	// DeleteByIDs removes points by their IDs
+	DeleteByIDs(ctx context.Context, ids []string) error
 }
 
 // Embedder is the contract to transform text into vectors

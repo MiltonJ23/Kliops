@@ -21,6 +21,9 @@ func NewMinioPDFParser(client *minio.Client) *MinioPDFParser {
 
 func (p *MinioPDFParser) FetchAndParse(ctx context.Context,minioPath string) (string,error) {
 	// let's parse the minio path 
+	if !strings.HasPrefix(minioPath, "minio://") {
+		return "", fmt.Errorf("invalid minio path: missing 'minio://' prefix")
+	}
 	parts := strings.SplitN(strings.TrimPrefix(minioPath,"minio://"),"/",2)
 	if len(parts) != 2 {
 		return "", fmt.Errorf("invalid miniO path format :%s ",minioPath)

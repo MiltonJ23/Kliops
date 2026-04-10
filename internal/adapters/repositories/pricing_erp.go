@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -39,7 +40,12 @@ func (e *ERPPricing) GetPrice(ctx context.Context, codeArticle string) (float64,
 	
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(response.Body)
-		return 0, fmt.Errorf("ERP returned status %d for article %s: %s", response.StatusCode, codeArticle, string(body))
+		truncatedBody := string(body)
+		if len(truncatedBody) > 200 {
+			truncatedBody = truncatedBody[:200] + "...[truncated]"
+		}
+		log.Printf("ERP returned status %d for article %s: %s", response.StatusCode, codeArticle, string(body))
+		return 0, fmt.Errorf("ERP returned status %d for article %s: %s", response.StatusCode, codeArticle, truncatedBody)
 	}
 
 	var result struct {

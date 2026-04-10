@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+
 	"github.com/MiltonJ23/Kliops/internal/core/domain"
 	"github.com/MiltonJ23/Kliops/internal/core/ports"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 type WorkerService struct {
@@ -60,6 +62,7 @@ func (w *WorkerService) HandleJob(ctx context.Context,jobID,projectID string) er
 		}
 
 		// now we fed those pairs to qdrant 
+		var ingestedIDs []string
 		for _, pair := range pairs {
 			qdrantID := uuid.New().String()
 
@@ -68,16 +71,22 @@ func (w *WorkerService) HandleJob(ctx context.Context,jobID,projectID string) er
 				AppelOffreID: projectID,
 				ExigenceTechnique: pair.Exigence,
 				ReponseApportee: pair.Reponse,
+				PrixPropose: decimal.Zero,
 				Gagne:	true ,
 			}
 
 			ingestionErr := w.Knowledge.Ingest(ctx,reponseHistorique)
 			if ingestionErr != nil {
+				log.Printf("Rolling back ingested IDs: %v", ingestedIDs)
+				w.Knowledge.DeleteByIDs(ctx, ingestedIDs)
 				return w.failJob(ctx,jobID,fmt.Sprintf("Vector DB ingestion failed : %v",ingestionErr))
 			}
+			ingestedIDs = append(ingestedIDs, qdrantID)
 
 			savingPointInDatabaseErr := w.Repo.SaveResponseHistory(ctx,projectID,pair.Exigence,pair.Reponse,qdrantID)
 			if savingPointInDatabaseErr != nil {
+				log.Printf("Rolling back ingested IDs: %v", ingestedIDs)
+				w.Knowledge.DeleteByIDs(ctx, ingestedIDs)
 				return w.failJob(ctx,jobID,fmt.Sprintf("failed to save metadata of the project `%s` in the database: %v",projectID,savingPointInDatabaseErr))
 			}
 		}

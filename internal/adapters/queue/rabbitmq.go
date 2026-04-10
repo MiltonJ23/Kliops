@@ -3,10 +3,12 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
 	"time"
+
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -90,17 +92,18 @@ func NewRabbitMQAdapter(amqpUri string) (*RabbitMQAdapter,error) {
 }
 
 func (r *RabbitMQAdapter) Close() error {
+	var errs []error
 	if r.Channel != nil {
 		if err := r.Channel.Close(); err != nil {
-			return fmt.Errorf("failed to close channel: %w", err)
+			errs = append(errs, fmt.Errorf("failed to close channel: %w", err))
 		}
 	}
 	if r.Conn != nil {
 		if err := r.Conn.Close(); err != nil {
-			return fmt.Errorf("failed to close connection: %w", err)
+			errs = append(errs, fmt.Errorf("failed to close connection: %w", err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (r *RabbitMQAdapter) PublishJob(ctx context.Context,jobID,projectID string) error {
@@ -139,16 +142,21 @@ func (r *RabbitMQAdapter) ConsumeJob(ctx context.Context,maxConcurrency int, han
 				if !ok {
 					return
 				}
-				// let's lock it if we reach maxConcurrency 
-				sem <- struct{}{}
-
 				// let's launch the processing of a message in its own isolated goroutine 
 				go func (delivery amqp.Delivery){
-					defer func() {  <-sem }()
+					acquired := false
+					select {
+					case sem <- struct{}{}:
+						acquired = true
+						defer func() { if acquired { <-sem } }()
+					case <-ctx.Done():
+						return
+					}
 
 					// Check context before processing
 					if ctx.Err() != nil {
-						delivery.Nack(true, false) // Requeue
+						delivery.Nack(false, true) // Requeue
+						<-sem
 						return
 					}
 
@@ -157,6 +165,7 @@ func (r *RabbitMQAdapter) ConsumeJob(ctx context.Context,maxConcurrency int, han
 					if unmarshalingMessageError != nil {
 						log.Printf("Unprocessable message format, dropping message : %v",unmarshalingMessageError)
 						delivery.Nack(false,false) // we send it directly to DLQ so that i can look at it after 
+						<-sem
 						return 
 					}
 					handlingErr := handler(ctx,msg.JobID,msg.ProjectID)
@@ -169,36 +178,45 @@ func (r *RabbitMQAdapter) ConsumeJob(ctx context.Context,maxConcurrency int, han
 							log.Printf("Job %s failed (Attempt %d/%d). Requeueing ",msg.JobID,msg.Retry,MaxRetries)
 
 							// Perform retry synchronously instead of in a nested goroutine
-							time.Sleep(time.Duration(msg.Retry * 5) * time.Second)
+							<-sem
+							acquired = false
+							select {
+							case <-time.After(time.Duration(msg.Retry * 5) * time.Second):
+								sem <- struct{}{}
+								acquired = true
 
-							// Check context before retrying
-							if ctx.Err() != nil {
-								delivery.Nack(true, false) // Requeue on context cancellation
+								// Check context before retrying
+								if ctx.Err() != nil {
+									delivery.Nack(false, true) // Requeue on context cancellation
+									return
+								}
+
+								body, marshalErr := json.Marshal(msg)
+								if marshalErr != nil {
+									log.Printf("Error marshalling retry message: %v", marshalErr)
+									delivery.Nack(false, false)
+									return
+								}
+
+								r.PublishMu.Lock()
+								publishErr := r.Channel.PublishWithContext(ctx,ExchangeName,"",false,false,amqp.Publishing{
+									ContentType: "application/json",
+									Body: body,
+									DeliveryMode: amqp.Persistent,
+								})
+								r.PublishMu.Unlock()
+
+								if publishErr != nil {
+									log.Printf("Error publishing retry message: %v", publishErr)
+									delivery.Nack(false, true) // Requeue
+									return
+								}
+
+								delivery.Ack(false)
+							case <-ctx.Done():
+								delivery.Nack(false, true) // Requeue on context cancellation
 								return
 							}
-
-							body, marshalErr := json.Marshal(msg)
-							if marshalErr != nil {
-								log.Printf("Error marshalling retry message: %v", marshalErr)
-								delivery.Nack(false, false)
-								return
-							}
-
-							r.PublishMu.Lock()
-							publishErr := r.Channel.PublishWithContext(ctx,ExchangeName,"",false,false,amqp.Publishing{
-								ContentType: "application/json",
-								Body: body,
-								DeliveryMode: amqp.Persistent,
-							})
-							r.PublishMu.Unlock()
-
-							if publishErr != nil {
-								log.Printf("Error publishing retry message: %v", publishErr)
-								delivery.Nack(true, false) // Requeue
-								return
-							}
-
-							delivery.Ack(false)
 						}
 						return 
 					}

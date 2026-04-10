@@ -1,17 +1,19 @@
 package main 
 
 import (
-	"encoding/json"
-	"net/http"
-	"time"
-	"log"
-	"os/signal"
-	"syscall"
 	"context"
+	"encoding/json"
+	"log"
+	"net/http"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
 	"github.com/joho/godotenv"
-	"github.com/MiltonJ23/Kliops/internal/adapters/repositories"
 	"github.com/MiltonJ23/Kliops/internal/adapters/handlers"
+	"github.com/MiltonJ23/Kliops/internal/adapters/repositories"
 	"github.com/MiltonJ23/Kliops/internal/core/services"
 )
 
@@ -37,9 +39,24 @@ func main(){
 		minioEndpoint = "localhost:9000"
 	}
 	
-	minioStorage, err := repositories.NewMinioStorage(minioEndpoint,os.Getenv("MINIO_ROOT_USER"),os.Getenv("MINIO_ROOT_PASSWORD"),false)
+	minioRootUser := os.Getenv("MINIO_ROOT_USER")
+	if minioRootUser == "" {
+		log.Fatal("MINIO_ROOT_USER environment variable is required and cannot be empty")
+	}
+	
+	minioRootPassword := os.Getenv("MINIO_ROOT_PASSWORD")
+	if minioRootPassword == "" {
+		log.Fatal("MINIO_ROOT_PASSWORD environment variable is required and cannot be empty")
+	}
+	
+	minioUseSSL := os.Getenv("MINIO_USE_SSL") == "true"
+	if !minioUseSSL && strings.HasPrefix(minioEndpoint, "https://") {
+		minioUseSSL = true
+	}
+	
+	minioStorage, err := repositories.NewMinioStorage(minioEndpoint, minioRootUser, minioRootPassword, minioUseSSL)
 	if err != nil {
-		log.Fatalf("unable to reach miniO : %v",err)
+		log.Fatalf("failed to initialize MinIO storage for endpoint %s: %v", minioEndpoint, err)
 	}
 
 	pricingService := services.NewPricingService()

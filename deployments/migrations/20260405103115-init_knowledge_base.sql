@@ -32,6 +32,16 @@ CREATE TABLE processing_jobs (
 CREATE INDEX idx_processing_jobs_appel_offre_id ON processing_jobs(appel_offre_id);
 CREATE INDEX idx_processing_jobs_status ON processing_jobs(status);
 
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+CREATE TRIGGER update_processing_jobs_updated_at BEFORE UPDATE ON processing_jobs FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
 CREATE TABLE reponses_historiques (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     appel_offre_id UUID NOT NULL REFERENCES appels_offres(id) ON DELETE CASCADE,

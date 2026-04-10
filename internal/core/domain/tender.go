@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"time"
+
+	"github.com/shopspring/decimal"
+)
 
 // AppelOffre refers to the complete consultation file (DCE)
 type AppelOffre struct {
@@ -16,8 +20,8 @@ type AppelOffre struct {
 type ReponseHistorique struct {
 	ID                string
 	AppelOffreID      string
-	ExigenceTechnique string // abstract of the CCTP related to the AppelOffre it was suppose to answer linked through AppelOffreID
+	ExigenceTechnique string // abstract of the CCTP related to the AppelOffre it was supposed to answer linked through AppelOffreID
 	ReponseApportee   string // Technical Brief which was written to respond to the call for tenders
-	PrixPropose       float64
+	PrixPropose       decimal.Decimal
 	Gagne             bool
 }
