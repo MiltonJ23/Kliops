@@ -57,3 +57,4 @@ DROP TABLE reponses_historiques;
 DROP TABLE processing_jobs;
 DROP TABLE documents;
 DROP TABLE appels_offres;
+DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE;

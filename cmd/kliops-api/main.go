@@ -1,4 +1,4 @@
-package main 
+package main
 
 import (
 	"context"
@@ -12,123 +12,139 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/jackc/pgx/v5/pgxpool"
+	
 	"github.com/MiltonJ23/Kliops/internal/adapters/handlers"
+	"github.com/MiltonJ23/Kliops/internal/adapters/queue"
 	"github.com/MiltonJ23/Kliops/internal/adapters/repositories"
 	"github.com/MiltonJ23/Kliops/internal/core/services"
 )
 
-
-
 type HealthResponse struct {
-	Status string `json:"status"`
+	Status  string `json:"status"`
 	Message string `json:"message"`
 }
 
-func main(){
-
+func main() {
 	if err := godotenv.Load(); err != nil {
-		log.Println("Warning : file .env not found ")
+		log.Println("Warning: .env file not found, relying on system environment variables")
 	}
 
-	log.Println("--> Initializing Kliops API Gateway ....")
+	log.Println("--> Initializing Kliops API Gateway...")
 
-
-
+	// 1. MinIO Initialization
 	minioEndpoint := os.Getenv("MINIO_ENDPOINT")
 	if minioEndpoint == "" {
 		minioEndpoint = "localhost:9000"
 	}
-	
-	minioRootUser := os.Getenv("MINIO_ROOT_USER")
-	if minioRootUser == "" {
-		log.Fatal("MINIO_ROOT_USER environment variable is required and cannot be empty")
-	}
-	
-	minioRootPassword := os.Getenv("MINIO_ROOT_PASSWORD")
-	if minioRootPassword == "" {
-		log.Fatal("MINIO_ROOT_PASSWORD environment variable is required and cannot be empty")
-	}
-	
-	minioUseSSL := os.Getenv("MINIO_USE_SSL") == "true"
-	if !minioUseSSL && strings.HasPrefix(minioEndpoint, "https://") {
+	minioUseSSL := false
+	if strings.HasPrefix(minioEndpoint, "https://") {
+		minioUseSSL = true
+		minioEndpoint = strings.TrimPrefix(minioEndpoint, "https://")
+	} else if strings.HasPrefix(minioEndpoint, "http://") {
+		minioEndpoint = strings.TrimPrefix(minioEndpoint, "http://")
+	} else if os.Getenv("MINIO_USE_SSL") == "true" {
 		minioUseSSL = true
 	}
-	
+
+	minioRootUser := os.Getenv("MINIO_ROOT_USER")
+	if minioRootUser == "" {
+		log.Fatal("MINIO_ROOT_USER is required")
+	}
+
+	minioRootPassword := os.Getenv("MINIO_ROOT_PASSWORD")
+	if minioRootPassword == "" {
+		log.Fatal("MINIO_ROOT_PASSWORD is required")
+	}
+
 	minioStorage, err := repositories.NewMinioStorage(minioEndpoint, minioRootUser, minioRootPassword, minioUseSSL)
 	if err != nil {
-		log.Fatalf("failed to initialize MinIO storage for endpoint %s: %v", minioEndpoint, err)
+		log.Fatalf("Failed to initialize MinIO client: %v", err)
 	}
 
+	// 2. PostgreSQL Initialization
+	dbDSN := os.Getenv("DB_DSN")
+	
+	dbPool, err := pgxpool.New(context.Background(), dbDSN)
+	if err != nil {
+		log.Fatalf("Failed to connect to PostgreSQL: %v", err)
+	}
+	defer dbPool.Close()
+
+	ingestionRepo := repositories.NewIngestionPostgres(dbPool)
+
+	// 3. RabbitMQ Initialization
+	rabbitURI := os.Getenv("RABBITMQ_URI")
+	
+	rabbitMQ, err := queue.NewRabbitMQAdapter(rabbitURI)
+	if err != nil {
+		log.Fatalf("Failed to connect to RabbitMQ: %v", err)
+	}
+	defer rabbitMQ.Conn.Close()
+	defer rabbitMQ.Channel.Close()
+
+	// 4. Services Initialization
 	pricingService := services.NewPricingService()
-	
-	erpBaseURL := os.Getenv("ERP_BASE_URL")
-	if erpBaseURL == "" {
-		erpBaseURL = "http://api.erp-btp.local"
-	}
-	
-	excelStrategy := repositories.NewExcelPricing("dummy_prices.xlsx")
-	erpStrategy := repositories.NewERPPricing(erpBaseURL) 
+	archiveService := services.NewArchiveService(ingestionRepo, minioStorage, rabbitMQ)
 
-	pricingService.RegisterStrategy("excel",excelStrategy)
-	pricingService.RegisterStrategy("erp",erpStrategy)
+	// 5. Handlers Initialization
+	gatewayHandler := handlers.NewGatewayHandler(minioStorage, pricingService)
+	ingestionHandler := handlers.NewIngestionHandler(archiveService, minioStorage)
 
-	// we then initialize the gateway 
-	gatewayHandler := handlers.NewGatewayHandler(minioStorage,pricingService)
+	// 6. Routing
+	mux := http.NewServeMux()
 
-
-	mux := http.NewServeMux() // Initializing the router 
-
-	//let's add the route to ensure that the API is alive 
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request){
-		w.Header().Set("content-type","application/json")
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(HealthResponse{
-			Status: "OK",
-			Message: "Kliops API Gatewau is running ",
+			Status:  "OK",
+			Message: "Kliops API Gateway is running",
 		})
 	})
 
-	// let's prepare the other routes of the API, the ones protected by the Middleware 
 	apiMux := http.NewServeMux()
-	apiMux.HandleFunc("POST /api/v1/upload",gatewayHandler.HandleUpload)
-	apiMux.HandleFunc("GET /api/v1/price",gatewayHandler.HandlePrice)
+	
+	// Gateway Routes
+	apiMux.HandleFunc("POST /upload", gatewayHandler.HandleUpload)
+	apiMux.HandleFunc("GET /price", gatewayHandler.HandlePrice)
 
-	mux.Handle("/api/v1/", handlers.APIKeyMiddleware(apiMux)) 
+	// Ingestion Routes
+	apiMux.HandleFunc("POST /ingest/archive", ingestionHandler.UploadArchiveZip)
+	apiMux.HandleFunc("POST /ingest/mercuriale", ingestionHandler.UploadMercuriale)
+	apiMux.HandleFunc("POST /ingest/template", ingestionHandler.UploadTemplateDocx)
 
-	// let's configure the server 
+	mux.Handle("/api/v1/", handlers.APIKeyMiddleware(apiMux))
+
+	// 7. Server Configuration
 	srv := &http.Server{
-		Addr: ":8070",
-		Handler: mux,
+		Addr:         ":8070",
+		Handler:      mux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
-		IdleTimeout: 120 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
-	// now we launch the server in a new goroutine 
-
 	go func() {
-		log.Println("Starting Kliops server on port 8070 ....")
-		serverListeningError := srv.ListenAndServe()
-		if serverListeningError != nil && serverListeningError != http.ErrServerClosed {
-			log.Fatalf("server failed to start %v",serverListeningError)
+		log.Println("Starting Kliops server on port 8070...")
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server failed to start: %v", err)
 		}
 	}()
 
-	//now let's implement the graceful shutdown mechanism 
-	quit := make(chan os.Signal,1)
-	signal.Notify(quit,syscall.SIGINT,syscall.SIGTERM)
-	<- quit 
+	// 8. Graceful Shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
 
-	log.Println("shutting down gracefully ....")
+	log.Println("Shutting down the server safely, hang on...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10 * time.Second) 
-	defer cancel() 
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	shuttingServerDownError := srv.Shutdown(ctx)
-	if shuttingServerDownError != nil {
-		log.Fatalf("Server forced to shutdown %v",shuttingServerDownError)
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
-	log.Println("Server exiting ....")
-
+	log.Println("Server exiting gracefully. Goodbye.")
 }

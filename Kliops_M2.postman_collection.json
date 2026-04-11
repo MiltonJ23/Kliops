@@ -1,133 +1,159 @@
 {
 	"info": {
-		"name": "Kliops - API Gateway M2",
-		"description": "API Gateway test suite: auth middleware, MinIO upload, and pricing strategy routing.",
+		"name": "Kliops - M2.1 Knowledge Infrastructure",
+		"description": "Tests complets : API Gateway, Ingestion massive (ZIP), et Vector Database (Qdrant).",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8070",
+			"type": "string"
+		},
+		{
+			"key": "qdrant_url",
+			"value": "http://localhost:6333",
+			"type": "string"
+		},
+		{
+			"key": "api_key",
+			"value": "kliops_gateway_key_999",
+			"type": "string"
+		}
+	],
 	"item": [
 		{
-			"name": "Health Check",
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "http://localhost:8070/health",
-					"protocol": "http",
-					"host": [
-						"localhost"
-					],
-					"port": "8070",
-					"path": [
-						"health"
-					]
-				},
-				"description": "Public endpoint to verify gateway availability."
-			}
-		},
-		{
-			"name": "Upload DCE",
-			"request": {
-				"method": "POST",
-				"header": [
-					{
-						"key": "X-API-Key",
-						"value": "{{api_key}}",
-						"type": "text"
+			"name": "1. Core & Security",
+			"item": [
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/health",
+							"host": ["{{base_url}}"],
+							"path": ["health"]
+						}
 					}
-				],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "document",
-							"type": "file",
-							"src": []
+				},
+				{
+					"name": "Security Rejection (No API Key)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/price?source=excel&code=ART01",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "price"],
+							"query": [
+								{ "key": "source", "value": "excel" },
+								{ "key": "code", "value": "ART01" }
+							]
 						}
-					]
-				},
-				"url": {
-					"raw": "http://localhost:8070/api/v1/upload",
-					"protocol": "http",
-					"host": [
-						"localhost"
-					],
-					"port": "8070",
-					"path": [
-						"api",
-						"v1",
-						"upload"
-					]
-				},
-				"description": "Uploads a multipart file to MinIO and returns the storage URI."
-			}
-		},
-		{
-			"name": "Pricing via Excel",
-			"request": {
-				"method": "GET",
-				"header": [
-					{
-						"key": "X-API-Key",
-						"value": "{{api_key}}",
-						"type": "text"
 					}
-				],
-				"url": {
-					"raw": "http://localhost:8070/api/v1/price?source=excel&code=ART01",
-					"protocol": "http",
-					"host": [
-						"localhost"
-					],
-					"port": "8070",
-					"path": [
-						"api",
-						"v1",
-						"price"
-					],
-					"query": [
-						{
-							"key": "source",
-							"value": "excel"
-						},
-						{
-							"key": "code",
-							"value": "ART01"
-						}
-					]
-				},
-				"description": "Fetches item pricing using the Excel strategy adapter."
-			}
+				}
+			]
 		},
 		{
-			"name": "Security Rejection",
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "http://localhost:8070/api/v1/price?source=excel&code=ART01",
-					"protocol": "http",
-					"host": [
-						"localhost"
-					],
-					"port": "8070",
-					"path": [
-						"api",
-						"v1",
-						"price"
-					],
-					"query": [
-						{
-							"key": "source",
-							"value": "excel"
+			"name": "2. Ingestion Routes",
+			"item": [
+				{
+					"name": "Upload Archive (ZIP)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "X-API-Key", "value": "{{api_key}}", "type": "text" }
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{ "key": "archive", "type": "file", "src": [] }
+							]
 						},
-						{
-							"key": "code",
-							"value": "ART01"
+						"url": {
+							"raw": "{{base_url}}/api/v1/ingest/archive",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "ingest", "archive"]
 						}
-					]
+					}
 				},
-				"description": "Validates HTTP 401 Unauthorized response for missing API key."
-			}
+				{
+					"name": "Upload Mercuriale (XLSX)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "X-API-Key", "value": "{{api_key}}", "type": "text" }
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{ "key": "excel_file", "type": "file", "src": [] }
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/ingest/mercuriale",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "ingest", "mercuriale"]
+						}
+					}
+				},
+				{
+					"name": "Upload Template (DOCX)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "X-API-Key", "value": "{{api_key}}", "type": "text" }
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{ "key": "template_file", "type": "file", "src": [] }
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/ingest/template",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "ingest", "template"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "3. Knowledge Base (Qdrant Verification)",
+			"item": [
+				{
+					"name": "Check Collection Info",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{qdrant_url}}/collections/kliops_knowledge",
+							"host": ["{{qdrant_url}}"],
+							"path": ["collections", "kliops_knowledge"]
+						}
+					}
+				},
+				{
+					"name": "Scroll Vectors (View Data)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"limit\": 10,\n  \"with_payload\": true,\n  \"with_vector\": false\n}"
+						},
+						"url": {
+							"raw": "{{qdrant_url}}/collections/kliops_knowledge/points/scroll",
+							"host": ["{{qdrant_url}}"],
+							"path": ["collections", "kliops_knowledge", "points", "scroll"]
+						}
+					}
+				}
+			]
 		}
 	]
 }
