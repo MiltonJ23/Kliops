@@ -49,9 +49,16 @@ func main(){
 		log.Fatal("MINIO_ROOT_PASSWORD environment variable is required and cannot be empty")
 	}
 	
-	minioUseSSL := os.Getenv("MINIO_USE_SSL") == "true"
-	if !minioUseSSL && strings.HasPrefix(minioEndpoint, "https://") {
-		minioUseSSL = true
+	minioUseSSL := strings.EqualFold(os.Getenv("MINIO_USE_SSL"), "true")
+	if strings.HasPrefix(minioEndpoint, "http://") || strings.HasPrefix(minioEndpoint, "https://") {
+		u, parseErr := url.Parse(minioEndpoint)
+		if parseErr != nil || u.Host == "" {
+			log.Fatalf("invalid MINIO_ENDPOINT %q: %v", minioEndpoint, parseErr)
+		}
+		minioEndpoint = u.Host
+		if u.Scheme == "https" {
+			minioUseSSL = true
+		}
 	}
 	
 	minioStorage, err := repositories.NewMinioStorage(minioEndpoint, minioRootUser, minioRootPassword, minioUseSSL)
