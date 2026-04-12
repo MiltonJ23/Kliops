@@ -1,19 +1,20 @@
 package main 
 
 import (
-	"encoding/json"
-	"net/http"
-	"time"
-	"log"
-	"os/signal"
-	"syscall"
 	"context"
+	"encoding/json"
+	"log"
+	"net/http"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
 	"github.com/joho/godotenv"
-	"github.com/MiltonJ23/Kliops/internal/adapters/repositories"
 	"github.com/MiltonJ23/Kliops/internal/adapters/handlers"
+	"github.com/MiltonJ23/Kliops/internal/adapters/repositories"
 	"github.com/MiltonJ23/Kliops/internal/core/services"
-	"github.com/xuri/excelize/v2"
 )
 
 
@@ -33,30 +34,47 @@ func main(){
 
 
 
-	minioStorage, err := repositories.NewMinioStorage("localhost:9000",os.Getenv("MINIO_ROOT_USER"),os.Getenv("MINIO_ROOT_PASSWORD"),false)
-	if err != nil {
-		log.Fatalf("unable to reach miniO : %v",err)
+	minioEndpoint := os.Getenv("MINIO_ENDPOINT")
+	if minioEndpoint == "" {
+		minioEndpoint = "localhost:9000"
 	}
-
-	pricingService := services.NewPricingService() 
-	if _, err := os.Stat("dummy_prices.xlsx"); os.IsNotExist(err) {
-		log.Println("Création du fichier Excel de test...")
-		f := excelize.NewFile()
-		// excelize crée une feuille "Sheet1" par défaut, on la renomme en "Prix" comme attendu par l'adapter
-		f.SetSheetName("Sheet1", "Prix")
-		f.SetCellValue("Prix", "A1", "ART01")
-		f.SetCellValue("Prix", "B1", 150.50) // Prix du ART01
-		f.SetCellValue("Prix", "A2", "ART02")
-		f.SetCellValue("Prix", "B2", 45.00)
-		
-		if err := f.SaveAs("dummy_prices.xlsx"); err != nil {
-			log.Fatalf("Impossible de sauvegarder l'Excel de test : %v", err)
+	
+	minioRootUser := os.Getenv("MINIO_ROOT_USER")
+	if minioRootUser == "" {
+		log.Fatal("MINIO_ROOT_USER environment variable is required and cannot be empty")
+	}
+	
+	minioRootPassword := os.Getenv("MINIO_ROOT_PASSWORD")
+	if minioRootPassword == "" {
+		log.Fatal("MINIO_ROOT_PASSWORD environment variable is required and cannot be empty")
+	}
+	
+	minioUseSSL := strings.EqualFold(os.Getenv("MINIO_USE_SSL"), "true")
+	if strings.HasPrefix(minioEndpoint, "http://") || strings.HasPrefix(minioEndpoint, "https://") {
+		u, parseErr := url.Parse(minioEndpoint)
+		if parseErr != nil || u.Host == "" {
+			log.Fatalf("invalid MINIO_ENDPOINT %q: %v", minioEndpoint, parseErr)
 		}
-		f.Close()
+		minioEndpoint = u.Host
+		if u.Scheme == "https" {
+			minioUseSSL = true
+		}
+	}
+	
+	minioStorage, err := repositories.NewMinioStorage(minioEndpoint, minioRootUser, minioRootPassword, minioUseSSL)
+	if err != nil {
+		log.Fatalf("failed to initialize MinIO storage for endpoint %s: %v", minioEndpoint, err)
 	}
 
+	pricingService := services.NewPricingService()
+	
+	erpBaseURL := os.Getenv("ERP_BASE_URL")
+	if erpBaseURL == "" {
+		erpBaseURL = "http://api.erp-btp.local"
+	}
+	
 	excelStrategy := repositories.NewExcelPricing("dummy_prices.xlsx")
-	erpStrategy := repositories.NewERPPricing("http://api.erp-btp.local") 
+	erpStrategy := repositories.NewERPPricing(erpBaseURL) 
 
 	pricingService.RegisterStrategy("excel",excelStrategy)
 	pricingService.RegisterStrategy("erp",erpStrategy)

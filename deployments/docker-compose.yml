@@ -28,7 +28,7 @@ services:
 
   minio:
     image: minio/minio:latest 
-    container_name: kliops_minio
+    container_name: kliops-minio
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -39,13 +39,34 @@ services:
       - minio_data:/data 
     command: server /data --console-address ":9001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/ready"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: kliops-rabbitmq
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq 
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
      
 
 volumes:
   pgdata:
   qdrant_data:
   minio_data:
+  rabbitmq_data:

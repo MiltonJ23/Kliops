@@ -2,7 +2,9 @@ package repositories
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -21,8 +23,12 @@ func (p *PostgresPricing) GetPrice(ctx context.Context, codeArticle string) (flo
 	// let's admit we have a table named mercuriale with two columns "code_article" and "prix_unitaire"
 	query := `SELECT prix_unitaire FROM mercuriale WHERE code_article= $1 LIMIT 1`
 	queryingDatabaseError := p.DB.QueryRow(ctx,query,codeArticle).Scan(&price)
+	
 	if queryingDatabaseError != nil {
-		return 0, fmt.Errorf("unable to find article %s in Postgres database : %v",codeArticle,queryingDatabaseError)
+		if errors.Is(queryingDatabaseError, pgx.ErrNoRows) {
+			return 0, fmt.Errorf("article %s not found: %w", codeArticle, pgx.ErrNoRows)
+		}
+		return 0, fmt.Errorf("unable to query article %s: %w",codeArticle,queryingDatabaseError)
 	}
 	return price,nil
 }

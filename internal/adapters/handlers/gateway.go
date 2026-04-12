@@ -2,7 +2,11 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
+	"path/filepath"
+	"strings"
+
 	"github.com/MiltonJ23/Kliops/internal/core/ports"
 	"github.com/MiltonJ23/Kliops/internal/core/services"
 )
@@ -36,22 +40,33 @@ func (h *GatewayHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	// let's upload the file to MiniO 
-	path, uploadingFileError := h.Storage.Upload(r.Context(),"dce-entrants",header.Filename,file,header.Size,header.Header.Get("content-type"))
-	if uploadingFileError != nil {
-		http.Error(w,uploadingFileError.Error(),http.StatusInternalServerError)
+	// Sanitize filename to prevent path traversal
+	filename := filepath.Base(header.Filename)
+	if strings.Contains(filename, "..") || len(filename) > 255 || strings.ContainsAny(filename, "/\\") {
+		http.Error(w, "invalid filename", http.StatusBadRequest)
 		return
 	}
 
+	// let's upload the file to MiniO 
+	path, uploadingFileError := h.Storage.Upload(r.Context(),"dce-entrants",filename,file,header.Size,header.Header.Get("content-type"))
+	if uploadingFileError != nil {
+		log.Printf("Error uploading file: %v", uploadingFileError)
+		http.Error(w,"failed to upload file",http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"status" : "success",
 		"path"	 : path,
-	})
+	}); err != nil {
+		log.Printf("Error encoding response: %v", err)
+	}
 }
 
 func (h *GatewayHandler) HandlePrice(w http.ResponseWriter, r *http.Request) {
-	source := r.URL.Query().Get("source") // ex: excel or portgres 
+	source := r.URL.Query().Get("source") // ex: excel or postgres 
 	code := r.URL.Query().Get("code")
 
 	if source == "" || code == "" {
@@ -61,14 +76,20 @@ func (h *GatewayHandler) HandlePrice(w http.ResponseWriter, r *http.Request) {
 
 	price, err := h.Pricing.GetPrice(r.Context(),source,code)
 	if err != nil {
-		http.Error(w,err.Error(),http.StatusNotFound)
+		// Log the full error server-side
+		log.Printf("Error getting price for code %s from source %s: %v", code, source, err)
+		// Return generic message to client
+		http.Error(w,"internal server error",http.StatusInternalServerError)
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"code_article"	: code,
 		"prix"			: price,
 		"source"		: source,
-	})
+	}); err != nil {
+		log.Printf("Error encoding price response: %v", err)
+	}
 }

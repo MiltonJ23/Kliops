@@ -6,8 +6,10 @@ import (
 )
 
 
-// FileStorage is the contract that defines how the system interact with Blob Storage(miniO/s3)
+// FileStorage is the contract that defines how the system interacts with Blob Storage (MinIO/S3)
 type FileStorage interface {
-	// Upload save a file in a bucket and return it's url 
-	Upload(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, contentType string) (string,error)
+	// Upload saves a file in a bucket and returns its URL
+	Upload(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, contentType string) (string, error)
+	// Delete removes a file from the bucket
+	Delete(ctx context.Context, bucketName, objectName string) error
 }
