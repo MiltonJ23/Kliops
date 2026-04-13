@@ -5,7 +5,7 @@ CREATE TABLE appels_offres (
     external_id VARCHAR(100) UNIQUE NOT NULL, -- ID issu du CSV
     titre TEXT NOT NULL,
     client VARCHAR(255) NOT NULL,
-    statut VARCHAR(50) NOT NULL,
+    status VARCHAR(50) NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
