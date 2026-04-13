@@ -12,4 +12,6 @@ type FileStorage interface {
 	Upload(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, contentType string) (string, error)
 	// Delete removes a file from the bucket
 	Delete(ctx context.Context, bucketName, objectName string) error
+	//DownloadStream will allow me to stream large document as through a pipe to avoid clogging the RAM 
+	DownloadStream(ctx context.Context,bucketName,objectName string) (io.ReadCloser,error)
 }

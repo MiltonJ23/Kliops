@@ -6,16 +6,25 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"io"
 
 	"github.com/MiltonJ23/Kliops/internal/core/ports"
 	"github.com/MiltonJ23/Kliops/internal/core/services"
 )
 
+type readCloser struct {
+	io.Reader
+}
+
+func (rc *readCloser) Close() error {
+	return nil
+}
 
 type GatewayHandler struct {
 	Storage ports.FileStorage 
 	Pricing *services.PricingService
 }
+
 
 func NewGatewayHandler(storage ports.FileStorage,pricing *services.PricingService) *GatewayHandler {
 	return &GatewayHandler{
@@ -42,13 +51,24 @@ func (h *GatewayHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Sanitize filename to prevent path traversal
 	filename := filepath.Base(header.Filename)
-	if strings.Contains(filename, "..") || len(filename) > 255 || strings.ContainsAny(filename, "/\\") {
-		http.Error(w, "invalid filename", http.StatusBadRequest)
+	if strings.Contains(filename, "..") || len(filename) > 255 || filename == "" || filename == "." {
+		http.Error(w,"invalid filename",http.StatusBadRequest)
 		return
 	}
 
+	buf := make([]byte, 512)
+	n, err := file.Read(buf)
+	if err != nil && err != io.EOF {
+		http.Error(w, "failed to read file", http.StatusInternalServerError)
+		return
+	}
+	contentType := http.DetectContentType(buf[:n])
+	if seeker, ok := file.(io.Seeker); ok {
+		seeker.Seek(0, 0)
+	}
+
 	// let's upload the file to MiniO 
-	path, uploadingFileError := h.Storage.Upload(r.Context(),"dce-entrants",filename,file,header.Size,header.Header.Get("content-type"))
+	path, uploadingFileError := h.Storage.Upload(r.Context(),"dce-entrants",filename,file,header.Size,contentType)
 	if uploadingFileError != nil {
 		log.Printf("Error uploading file: %v", uploadingFileError)
 		http.Error(w,"failed to upload file",http.StatusInternalServerError)
@@ -83,13 +103,10 @@ func (h *GatewayHandler) HandlePrice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(map[string]interface{}{
-		"code_article"	: code,
-		"prix"			: price,
-		"source"		: source,
-	}); err != nil {
-		log.Printf("Error encoding price response: %v", err)
-	}
+	w.Header().Set("Content-Type","application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"source": source,
+		"code_article": code,
+		"prix" : price,
+	})
 }

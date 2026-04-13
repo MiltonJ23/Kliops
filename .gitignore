@@ -6,3 +6,4 @@ go.sum
 .idea/
 .vscode/ 
 *.swp
+credentials.json
