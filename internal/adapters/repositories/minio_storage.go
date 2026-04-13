@@ -57,3 +57,19 @@ func (m *MinioStorage) Delete(ctx context.Context, bucketName, objectName string
 	err := m.Client.RemoveObject(ctx, bucketName, objectName, minio.RemoveObjectOptions{})
 	return err
 }
+
+func (m *MinioStorage) DownloadStream(ctx context.Context,bucketName,objectName string) (io.ReadCloser,error) {
+	options := minio.GetObjectOptions{}
+
+	object, fetchObjectError := m.Client.GetObject(ctx,bucketName,objectName,options)
+	if fetchObjectError != nil {
+		return nil, fmt.Errorf("failed to fetch object %s from bucket %s : %v",objectName,bucketName,fetchObjectError)
+	}
+
+
+	_, fileDoesntExistErr := object.Stat()
+	if fileDoesntExistErr != nil {
+		return nil, fmt.Errorf("failed to get %s stats, check if this file exist : %v",objectName,fileDoesntExistErr)
+	}
+	return object,nil
+}
