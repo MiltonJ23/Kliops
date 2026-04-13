@@ -32,6 +32,7 @@ CREATE TABLE processing_jobs (
 CREATE INDEX idx_processing_jobs_appel_offre_id ON processing_jobs(appel_offre_id);
 CREATE INDEX idx_processing_jobs_status ON processing_jobs(status);
 
+-- +migrate StatementBegin
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -39,6 +40,7 @@ BEGIN
     RETURN NEW;
 END;
 $$ language 'plpgsql';
+-- +migrate StatementEnd
 
 CREATE TRIGGER update_processing_jobs_updated_at BEFORE UPDATE ON processing_jobs FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
