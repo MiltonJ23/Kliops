@@ -21,11 +21,10 @@ func TestNewPricingService(t *testing.T) {
 	if svc == nil {
 		t.Fatal("NewPricingService returned nil")
 	}
-	if svc.Strategies == nil {
-		t.Fatal("Strategies map should be initialized")
-	}
-	if len(svc.Strategies) != 0 {
-		t.Fatalf("expected empty strategies map, got %d entries", len(svc.Strategies))
+	// Verify an empty service has no strategies: any lookup should fail.
+	_, err := svc.GetPrice(context.Background(), "any", "code")
+	if err == nil {
+		t.Fatal("expected error for unregistered strategy on new service, got nil")
 	}
 }
 
@@ -35,11 +34,13 @@ func TestRegisterStrategy(t *testing.T) {
 
 	svc.RegisterStrategy("excel", mock)
 
-	if len(svc.Strategies) != 1 {
-		t.Fatalf("expected 1 strategy, got %d", len(svc.Strategies))
+	// Verify the strategy is registered by calling GetPrice successfully.
+	price, err := svc.GetPrice(context.Background(), "excel", "ART01")
+	if err != nil {
+		t.Fatalf("expected 'excel' strategy to be registered, got error: %v", err)
 	}
-	if _, ok := svc.Strategies["excel"]; !ok {
-		t.Error("expected 'excel' strategy to be registered")
+	if price != 10.0 {
+		t.Errorf("expected price 10.0 from registered strategy, got %f", price)
 	}
 }
 
@@ -51,9 +52,7 @@ func TestRegisterStrategy_OverwritesExisting(t *testing.T) {
 	svc.RegisterStrategy("excel", first)
 	svc.RegisterStrategy("excel", second)
 
-	if len(svc.Strategies) != 1 {
-		t.Fatalf("expected 1 strategy after overwrite, got %d", len(svc.Strategies))
-	}
+	// After overwrite, GetPrice should use the second (latest) strategy.
 	price, err := svc.GetPrice(context.Background(), "excel", "ART01")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
