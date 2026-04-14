@@ -1,9 +1,10 @@
-/bin/ 
-/kliops-api 
-.env 
-go.work 
-go.sum 
+/bin/
+/kliops-api
+.env
+.env.*
+go.work
 .idea/
-.vscode/ 
+.vscode/
 *.swp
 credentials.json
+coverage.out

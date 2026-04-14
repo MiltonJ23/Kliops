@@ -23,6 +23,9 @@ type mockRoundTripper struct {
 
 func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	m.capturedReq = req
+	if req.Context().Err() != nil {
+		return nil, req.Context().Err()
+	}
 	return m.response, m.err
 }
 
@@ -94,7 +97,7 @@ func TestERPPricing_GetPrice_ServerReturnsNon200_ReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for non-200 response, got nil")
 	}
-	if !strings.Contains(err.Error(), "failed to call ERP") {
+	if !strings.Contains(err.Error(), "ERP returned status") {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }

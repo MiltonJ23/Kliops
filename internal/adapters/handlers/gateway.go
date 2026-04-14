@@ -98,6 +98,12 @@ func (h *GatewayHandler) HandlePrice(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Log the full error server-side
 		log.Printf("Error getting price for code %s from source %s: %v", code, source, err)
+		// Return 404 for "not found" / "not configured" errors, 500 otherwise
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "not configured") {
+			http.Error(w,"resource not found",http.StatusNotFound)
+			return
+		}
 		// Return generic message to client
 		http.Error(w,"internal server error",http.StatusInternalServerError)
 		return

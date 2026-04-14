@@ -125,6 +125,10 @@ func (r *RabbitMQAdapter) PublishJob(ctx context.Context,jobID,projectID string)
 
 
 func (r *RabbitMQAdapter) ConsumeJob(ctx context.Context,maxConcurrency int, handler func(ctx context.Context, jobID, projectID string) error) error {
+	if maxConcurrency < 1 {
+		return fmt.Errorf("maxConcurrency must be >= 1, got %d", maxConcurrency)
+	}
+
 	msgs, channelCreationError := r.Channel.Consume(QueueName,"",false,false,false,false,nil)
 	if channelCreationError != nil {
 		return fmt.Errorf("failed to consume from Queue : %v",channelCreationError)
@@ -182,8 +186,13 @@ func (r *RabbitMQAdapter) ConsumeJob(ctx context.Context,maxConcurrency int, han
 							acquired = false
 							select {
 							case <-time.After(time.Duration(msg.Retry * 5) * time.Second):
-								sem <- struct{}{}
-								acquired = true
+								select {
+								case sem <- struct{}{}:
+									acquired = true
+								case <-ctx.Done():
+									delivery.Nack(false, true)
+									return
+								}
 
 								// Check context before retrying
 								if ctx.Err() != nil {
