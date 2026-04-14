@@ -24,7 +24,7 @@ func NewDocumentService(storage ports.FileStorage,docGen ports.DocumentGenerator
 
 
 func (d *DocumentService) CompileTechnicalMemory(ctx context.Context, projectName string, variables map[string]string, targetEmail string) (string, error) {
-	templateStream,streamingErr  := d.Storage.DownloadStream(ctx,"kliops-config","template_charte.docs") 
+	templateStream,streamingErr  := d.Storage.DownloadStream(ctx,"kliops-config","template_charte.docx") 
 	if streamingErr  != nil {
 		return "", fmt.Errorf("failed to stream the Template of the company from MiniO:%v",streamingErr)
 	}
