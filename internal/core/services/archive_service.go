@@ -137,27 +137,15 @@ func (s *ArchiveService) ProcessZipArchive(ctx context.Context, file multipart.F
 			}
 			//we then extract the pdf from the zip and send them to MiniO
 
-			dcePaths, uploadingZipFileError := s.UploadFileFromZip(ctx, zipReader, manifest.FichierDCE, projID, "DCE")
+			paths, uploadingZipFileError := s.UploadFileFromZip(ctx, zipReader, manifest.FichierDCE, projID, "DCE")
 			if uploadingZipFileError != nil {
 				return fmt.Errorf("an error occurred while trying to upload all of the zip files to the bucket")
 			}
-			uploadedPaths = append(uploadedPaths, dcePaths...)
-			for _, path := range dcePaths {
+			uploadedPaths = append(uploadedPaths, paths...)
+			for _, path := range paths {
 				err := txRepo.SaveDocument(ctx, projID, "DCE", path)
 				if err != nil {
 					return fmt.Errorf("an error occurred while saving document")
-				}
-			}
-
-			memPaths, uploadingMemoireErr := s.UploadFileFromZip(ctx, zipReader, manifest.FichierMEM, projID, "MEMOIRE")
-			if uploadingMemoireErr != nil {
-				return fmt.Errorf("an error occurred while trying to upload the memoire file to the bucket")
-			}
-			uploadedPaths = append(uploadedPaths, memPaths...)
-			for _, path := range memPaths {
-				err := txRepo.SaveDocument(ctx, projID, "MEMOIRE", path)
-				if err != nil {
-					return fmt.Errorf("an error occurred while saving memoire document")
 				}
 			}
 

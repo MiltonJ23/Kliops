@@ -1,400 +1,176 @@
-# Kliops
+<p align="center">
+  <img src="docs/banner.svg" alt="Kliops" width="100%"/>
+</p>
 
-Kliops is an AI-driven tender response automation platform for the BTP (civil engineering) sector. It ingests Dossiers de Consultation des Entreprises (DCE), builds a searchable vector knowledge base from past responses, and drives a multi-step LLM agent — backed by a local Ollama/Gemma instance — that retrieves relevant precedents, prices bill-of-quantities line items, and generates a structured technical memorandum (Memoire Technique) via Google Docs.
+<p align="center">
+  <a href="https://github.com/MiltonJ23/Kliops/actions/workflows/ci.yml"><img src="https://github.com/MiltonJ23/Kliops/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/MiltonJ23/Kliops/pkgs/container/kliops"><img src="https://img.shields.io/badge/GHCR-kliops-blue?logo=github" alt="GHCR"></a>
+  <a href="https://github.com/MiltonJ23/Kliops/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"></a>
+</p>
 
-The system is built around hexagonal architecture: the domain and service layer are fully isolated from infrastructure adapters (Postgres, MinIO, RabbitMQ, Qdrant, Ollama, Google Workspace). Each adapter is replaceable by implementing the corresponding port interface.
+<p align="center">
+  <img src="https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white" alt="Go 1.25">
+  <img src="https://img.shields.io/badge/Gemma-LLM-8E75B2?logo=google&logoColor=white" alt="Gemma">
+  <img src="https://img.shields.io/badge/mxbai--embed--large-Embeddings-4285F4?logo=google&logoColor=white" alt="mxbai-embed-large">
+  <img src="https://img.shields.io/badge/Ollama-Runtime-000000?logo=ollama&logoColor=white" alt="Ollama">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/PostgreSQL-15-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL">
+  <img src="https://img.shields.io/badge/MinIO-Object_Storage-C72E49?logo=minio&logoColor=white" alt="MinIO">
+  <img src="https://img.shields.io/badge/RabbitMQ-4-FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ">
+  <img src="https://img.shields.io/badge/Qdrant-Vector_DB-DC382D?logo=qdrant&logoColor=white" alt="Qdrant">
+  <img src="https://img.shields.io/badge/Kubernetes-Orchestration-326CE5?logo=kubernetes&logoColor=white" alt="Kubernetes">
+  <img src="https://img.shields.io/badge/Docker-Container-2496ED?logo=docker&logoColor=white" alt="Docker">
+</p>
 
 ---
+
+Kliops is an agentic RFP (Request for Proposal) response engine built in Go for the French BTP (Building and Public Works) sector. It ingests historical tender documents, extracts structured knowledge using Gemma, indexes it into a vector database, and generates technical memorandums from reusable requirement-response pairs.
+
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Ingestion Pipeline](#ingestion-pipeline)
+- [API](#api)
+- [Infrastructure](#infrastructure)
+- [Getting Started](#getting-started)
+- [API Documentation](#api-documentation)
+- [License](#license)
 
 ## Architecture
 
+Hexagonal architecture with strict separation between domain logic and external infrastructure.
+
 ```
-                      HTTP (Go net/http)
+cmd/kliops-api/main.go            HTTP server, dependency wiring
+internal/core/domain/              Domain entities
+internal/core/ports/               Interface contracts
+internal/core/services/            Business logic orchestration
+internal/adapters/handlers/        HTTP handlers, middleware
+internal/adapters/repositories/    PostgreSQL, MinIO, Qdrant adapters
+internal/adapters/llm/             Gemma extractor, Ollama embedder
+internal/adapters/queue/           RabbitMQ adapter
+internal/adapters/parser/          PDF text extraction
+internal/adapters/google_workspace/ Google Docs integration
+```
+
+The **Strategy Pattern** drives pricing: three interchangeable backends (PostgreSQL, Excel via MinIO, external ERP API) implement the same `PricingStrategy` port.
+
+Async processing uses RabbitMQ with retry semantics (3 attempts, exponential backoff) and a dead-letter queue for failed jobs.
+
+Full architecture documentation is available in the [Wiki](https://github.com/MiltonJ23/Kliops/wiki/Architecture).
+
+## Ingestion Pipeline
+
+```
+ZIP (manifest.csv + PDFs)
+  |
+  v
+ArchiveService ---[tx]--> PostgreSQL (projects, documents, jobs)
+  |                          |
+  v                          v
+MinIO (dce-archive/)     RabbitMQ (ingestion_jobs)
                              |
-                    APIKeyMiddleware
-                             |
-         ┌───────────────────┼──────────────────────┐
-         |                   |                       |
-   IngestionHandler    AgentHandler           GatewayHandler
-         |                   |                       |
-   ArchiveService      AgentService            PricingService
-         |              (orchestrator)              |
-   IngestionRepo     KliopsOrchestrator        strategies
-   (Postgres)        (multi-agent loop,         ├── postgres
-         |            tool-calling via          ├── excel
-   RabbitMQ           Ollama /v1 OpenAI API)    └── erp (optional)
-   (job queue)              |
-         |          ┌───────┼────────────┐
-   WorkerService    |       |            |
-   (async consumer) |       |            |
-         |    KnowledgeService  PricingService  DocumentService
-   GemmaExtractor   (Qdrant)    (see above)   (Google Docs)
-   (embeddings +          |
-    text extraction)  QdrantRepo
-         |             (vectors)
-   MinioPDFParser
-   (MinIO → PDF text)
+                             v
+                      WorkerService
+                         |     |
+              PDF parse  |     |  Embed chunks
+              (MinIO)    |     |  (mxbai-embed-large)
+                         v     v
+                    GemmaExtractor
+                    (exigence, reponse) pairs
+                         |
+                         v
+              Qdrant (memoire_technique)
+              PostgreSQL (reponses_historiques)
 ```
 
-Ingest path:
-```
-POST /api/v1/ingest/archive  →  ArchiveService.ProcessZipArchive
-  → unzips DCE + MEMOIRE PDFs
-  → uploads to MinIO (dce-archive bucket)
-  → writes appel_offre + documents rows in Postgres
-  → publishes job to RabbitMQ
+Each DCE chunk is matched against the top-3 most similar MEMOIRE chunks (cosine similarity > 0.40) before being sent to Gemma for structured extraction.
 
-RabbitMQ consumer (WorkerService)
-  → downloads PDF from MinIO
-  → extracts text (GemmaExtractor)
-  → embeds chunks (OllamaEmbedder)
-  → stores vectors in Qdrant with metadata
-```
+## API
 
-Agent path:
-```
-POST /api/v1/agent/ask
-  → AgentService.ProcessTender
-  → builds system + user prompt
-  → KliopsOrchestrator.Run (tool-calling loop, max 12 iterations)
-      tool: search_knowledge   → KnowledgeService → Qdrant kNN
-      tool: get_price          → PricingService   → configured strategy
-      tool: generate_document  → DocumentService  → Google Drive/Docs
-  → returns document URL and status message
-```
+All endpoints under `/api/v1/` require the `X-API-KEY` header.
 
----
+| Method | Path                        | Description                              |
+|--------|-----------------------------|------------------------------------------|
+| GET    | `/health`                   | Health check (no auth)                   |
+| POST   | `/api/v1/upload`            | Upload a DCE document (max 50 MB)        |
+| GET    | `/api/v1/price`             | Query unit price by source and code      |
+| POST   | `/api/v1/ingest/archive`    | Upload ZIP archive for async ingestion   |
+| POST   | `/api/v1/ingest/mercuriale` | Upload XLSX price list                   |
+| POST   | `/api/v1/ingest/template`   | Upload DOCX company charter template     |
 
-## API Reference
+See the full [API Reference](https://github.com/MiltonJ23/Kliops/wiki/API-Reference) in the Wiki or the [OpenAPI specification](docs/openapi.yaml).
 
-All routes under `/api/v1/` require the header `X-API-KEY: <API_KEY_SECRET>`.
+## Infrastructure
 
-### System probes
+| Service    | Image                  | Role                              | Ports       |
+|------------|------------------------|-----------------------------------|-------------|
+| PostgreSQL | postgres:15-alpine     | Relational store                  | 5432        |
+| MinIO      | minio/minio            | S3-compatible object storage      | 9000, 9001  |
+| RabbitMQ   | rabbitmq:4-management  | Async job queue                   | 5672, 15672 |
+| Qdrant     | qdrant/qdrant          | Vector database (gRPC)            | 6333, 6334  |
+| Ollama     | (external)             | LLM runtime (Gemma + embedder)    | 11434       |
 
-| Method | Path      | Auth | Description                               |
-|--------|-----------|------|-------------------------------------------|
-| GET    | /         | none | Service identity and uptime               |
-| GET    | /livez    | none | Liveness: always 200 while process is up  |
-| GET    | /health   | none | Alias for /livez                          |
-| GET    | /readyz   | none | Readiness: checks all five subsystems     |
-| GET    | /version  | none | Build version string                      |
+All services except Ollama are defined in `deployments/docker-compose.yml`.
 
-`GET /readyz` response:
-```json
-{
-  "status": "READY",
-  "checks": [
-    {"name": "postgres", "ok": true},
-    {"name": "minio",    "ok": true},
-    {"name": "rabbitmq", "ok": true},
-    {"name": "qdrant",   "ok": true},
-    {"name": "ollama",   "ok": true}
-  ]
-}
-```
-
-### Ingestion
-
-#### `POST /api/v1/ingest/archive`
-
-Accepts a multipart form with a ZIP archive field named `archive`. The ZIP must contain a `manifest.json` describing the project and pointing to DCE/MEMOIRE PDF files within the archive.
-
-Manifest format (`manifest.json`):
-```json
-{
-  "external_id": "AO-2026-001",
-  "titre": "Construction de la salle des fetes",
-  "client": "Mairie de Yaonde",
-  "fichier_dce": "dce.pdf",
-  "fichier_mem": "memoire.pdf"
-}
-```
-
-Returns `202 Accepted` with the created job ID.
-
-#### `POST /api/v1/ingest/mercuriale`
-
-Multipart form, field `excel_file`. Uploads an Excel price list (`.xlsx`) to MinIO under `kliops-config/mercuriale_current.xlsx`. Enables the `excel` pricing strategy for subsequent agent runs.
-
-#### `POST /api/v1/ingest/template`
-
-Multipart form, field `template`. Uploads a `.docx` template to MinIO under `kliops-config/template_charte.docx`. Used by the document generation step of the agent pipeline.
-
-#### `POST /api/v1/upload`
-
-General-purpose file upload. Multipart form, field `document`. Stores in MinIO bucket `dce-entrants`. Returns the MinIO object path.
-
-### Agent
-
-#### `POST /api/v1/agent/ask`
-
-Runs the full agentic pipeline for a single tender.
-
-Request body:
-```json
-{
-  "dce_content":  "<full extracted text of the DCE document>",
-  "project_name": "Construction salle des fetes Yaounde",
-  "target_email": "chef.projet@entreprise.com",
-  "client_name":  "Mairie de Yaounde"
-}
-```
-
-`dce_content` must be between 50 and 500,000 characters.
-
-Response (200 OK):
-```json
-{
-  "message":     "Document genere: https://docs.google.com/document/d/.../edit",
-  "duration_ms": 42380
-}
-```
-
-Error codes:
-- `400` — malformed or unparseable JSON
-- `413` — request body exceeds 10 MB
-- `422` — domain validation failure (short content, missing fields)
-- `504` — pipeline did not complete within 10 minutes
-- `500` — unexpected internal failure
-
-### Pricing
-
-#### `GET /api/v1/price?source=<strategy>&code=<code_article>`
-
-Query a single price from a registered pricing strategy.
-
-| Parameter | Values                         |
-|-----------|--------------------------------|
-| `source`  | `postgres`, `excel`, `erp`     |
-| `code`    | article code (e.g. `BET001`)   |
-
-Response (200 OK):
-```json
-{
-  "source":       "postgres",
-  "code_article": "BET001",
-  "prix":         185.50
-}
-```
-
-- `400` — missing or empty parameters
-- `404` — code not found in the specified source
-- `500` — strategy not registered or infrastructure failure
-
----
-
-## Configuration
-
-All configuration is via environment variables. Populate a `.env` file at the repository root for local development; the application loads it via `godotenv` at startup.
-
-| Variable               | Required | Default            | Description                                              |
-|------------------------|----------|--------------------|----------------------------------------------------------|
-| `DATABASE_URL`         | yes      | —                  | Postgres DSN: `postgres://user:pass@host:5432/db?sslmode=disable` |
-| `MINIO_ENDPOINT`       | yes      | —                  | MinIO host:port (no scheme)                              |
-| `MINIO_ROOT_USER`      | yes      | —                  | MinIO access key                                         |
-| `MINIO_ROOT_PASSWORD`  | yes      | —                  | MinIO secret key                                         |
-| `MINIO_USE_SSL`        | no       | `false`            | Set `true` for TLS MinIO endpoints                       |
-| `RABBITMQ_URL`         | yes      | —                  | AMQP URI: `amqp://user:pass@host:5672/`. URL-encode special chars in password. |
-| `QDRANT_ADDR`          | yes      | —                  | Qdrant gRPC address: `host:6334`                         |
-| `QDRANT_COLLECTION`    | no       | `btp_knowledge`    | Qdrant collection name                                   |
-| `OLLAMA_BASE_URL`      | no       | `http://localhost:11434` | Base URL for Ollama API                             |
-| `OLLAMA_CHAT_MODEL`    | no       | `gemma4:e4b`       | Chat/generation model tag                                |
-| `OLLAMA_EMBED_MODEL`   | no       | `mxbai-embed-large`| Embedding model tag                                      |
-| `GOOGLE_CREDENTIALS_FILE` | no    | `./credentials.json` | Path to Google service account JSON key file           |
-| `PRICING_EXCEL_PATH`   | no       | `./dummy_prices.xlsx` | Path to Excel price list. If absent, `excel` strategy is disabled. |
-| `ERP_BASE_URL`         | no       | —                  | Base URL for ERP pricing API. If unset, `erp` strategy is disabled. |
-| `API_KEY_SECRET`       | yes      | —                  | Pre-shared key required in `X-API-KEY` header            |
-| `APP_ADDR`             | no       | `:8070`            | TCP address to bind (`host:port` or `:port`)             |
-
-The application refuses to start if any required variable is missing. It also validates connectivity to Postgres, MinIO, RabbitMQ, and Qdrant during initialization.
-
----
-
-## Database Schema
-
-Run `deployments/migrations/20260405103115-init_knowledge_base.sql` against your Postgres instance to create all required tables. The migration uses [sql-migrate](https://github.com/rubenv/sql-migrate) format (`+migrate Up`/`+migrate Down` directives); use `sql-migrate up` or apply the Up section manually with `psql`.
-
-Tables:
-- `appels_offres` — tender records
-- `documents` — references to MinIO objects (DCE and MEMOIRE)
-- `processing_jobs` — async job state machine (PENDING → PROCESSING → COMPLETED/FAILED)
-- `reponses_historiques` — vector knowledge base metadata
-- `mercuriale` — unit price reference table
-
----
-
-## Development
+## Getting Started
 
 ### Prerequisites
 
-- Go 1.22 or later
+- Go 1.25+
 - Docker and Docker Compose
-- An Ollama installation with `gemma4:e4b` and `mxbai-embed-large` pulled:
-  ```
-  ollama pull gemma4:e4b
-  ollama pull mxbai-embed-large
-  ```
-- A Google Cloud service account with Drive and Docs API enabled. Place the JSON key at `./credentials.json`.
+- Ollama with `gemma` and `mxbai-embed-large` models
 
-### Starting local infrastructure
+### Quick Start
 
-```sh
-docker compose --env-file .env -f deployments/docker-compose.yml up -d
+```bash
+# Clone
+git clone https://github.com/MiltonJ23/Kliops.git
+cd Kliops
+
+# Configure environment
+cp .env.example .env   # then edit values
+
+# Start backing services
+make docker-up
+
+# Apply database migrations
+sql-migrate up
+
+# Build and run the API
+make run
+
+# Verify
+curl http://localhost:8070/health
 ```
-
-This brings up Postgres 15, MinIO, RabbitMQ 4, and Qdrant. Wait for all health checks to pass before running the application.
-
-### Applying migrations
-
-```sh
-# requires sql-migrate: go install github.com/rubenv/sql-migrate/...@latest
-DB_DSN=$DATABASE_URL sql-migrate up -env development
-# or manually:
-docker exec -i kliops-postgres psql -U kliops -d kliops < deployments/migrations/20260405103115-init_knowledge_base.sql
-```
-
-### Building and running
-
-```sh
-make build    # go build -o bin/kliops-api cmd/kliops-api/main.go
-make run      # build + ./bin/kliops-api
-```
-
-The binary reads `.env` automatically via `godotenv`.
-
-### Running with live reload (optional)
-
-```sh
-go install github.com/air-verse/air@latest
-air
-```
-
----
-
-## Testing
-
-### Unit tests
-
-```sh
-make test
-# or with coverage:
-go test -race -coverprofile=coverage.out ./...
-go tool cover -func=coverage.out
-go tool cover -html=coverage.out -o coverage.html
-```
-
-### Integration smoke tests
-
-With infrastructure running and `./bin/kliops-api` listening on `:8070`:
-
-```sh
-# Liveness
-curl http://localhost:8070/livez
-
-# Readiness (all five subsystems)
-curl http://localhost:8070/readyz
-
-# Pricing lookup (requires at least one mercuriale row)
-curl -H "X-API-KEY: $API_KEY_SECRET" \
-     "http://localhost:8070/api/v1/price?source=postgres&code=BET001"
-
-# Agent pipeline (minimum 50-char DCE content required)
-curl -X POST http://localhost:8070/api/v1/agent/ask \
-     -H "Content-Type: application/json" \
-     -H "X-API-KEY: $API_KEY_SECRET" \
-     -d '{
-       "dce_content":  "Fourniture et pose de beton arme 30MPa pour semelles filantes. Surface estimee a 250m2. Dosage ciment CPJ 45. Armatures acier HA 500. Fouilles mecaniques incluses.",
-       "project_name": "Immeuble R+4 Bastos Yaounde",
-       "target_email": "ingenieur@entreprise.cm",
-       "client_name":  "Societe Immobiliere du Centre"
-     }'
-```
-
-### Test coverage targets
-
-| Package                              | Focus                                    |
-|--------------------------------------|------------------------------------------|
-| `internal/core/services`             | AgentService, PricingService validation  |
-| `internal/adapters/handlers`         | HTTP status codes, JSON serialization    |
-| `cmd/kliops-api`                     | Route registration, StripPrefix behavior |
-
----
-
-## Deployment
 
 ### Docker
 
-```sh
-docker build --build-arg VERSION=$(git describe --tags --always) -t kliops-api .
-docker run --env-file .env -p 8070:8070 kliops-api
+```bash
+docker build -t kliops-api .
+docker run --rm -p 8070:8070 --env-file .env kliops-api
 ```
 
-The image uses a non-root user (`kliops`). The binary is statically linked (`CGO_ENABLED=0`); no external library dependencies at runtime.
+The container image is also published to GHCR:
 
-### Kubernetes
-
-Manifests are in `deployments/k8s/kliops.yaml`. They define a Namespace, ConfigMap, Secret, Deployment (2 replicas by default), ClusterIP Service, and Ingress.
-
-Before applying, substitute the three placeholder tokens:
-
-```sh
-sed \
-  -e "s|IMAGE_REPOSITORY_PLACEHOLDER|ghcr.io/miltonj23/kliops|g" \
-  -e "s|IMAGE_TAG_PLACEHOLDER|v1.0.0|g" \
-  -e "s|NAMESPACE_PLACEHOLDER|kliops|g" \
-  deployments/k8s/kliops.yaml | kubectl apply -f -
+```bash
+docker pull ghcr.io/miltonj23/kliops:latest
 ```
 
-The Deployment configures:
-- Liveness probe: `GET /livez` (initial delay 10s, period 15s)
-- Readiness probe: `GET /readyz` (initial delay 15s, period 10s)
-- Resource requests/limits: 250m/500m CPU, 128Mi/256Mi memory
-- `GOOGLE_CREDENTIALS_FILE` must be mounted as a secret volume in production
+### Tests
 
-### CI/CD workflows
-
-| Workflow                      | Trigger                | Action                                       |
-|-------------------------------|------------------------|----------------------------------------------|
-| `.github/workflows/ci.yml`    | push to main, all PRs  | vet, race tests with coverage, build binary  |
-| `.github/workflows/release.yml` | push of `v*` tag     | multi-arch Docker build, push to GHCR        |
-| `.github/workflows/deploy.yml`  | manual (`workflow_dispatch`) | render k8s manifest, `kubectl apply` |
-
-For the deploy workflow, set repository secrets `KUBE_CONFIG_B64` (base64-encoded kubeconfig) in your GitHub repository settings.
-
----
-
-## Project Structure
-
-```
-.
-├── cmd/
-│   └── kliops-api/           Application entrypoint
-│       └── main.go           Bootstrap: config, wiring, HTTP server, readiness
-├── internal/
-│   ├── core/
-│   │   ├── domain/           Value objects and domain types
-│   │   ├── ports/            Interface definitions (FileStorage, PricingStrategy, DocumentGenerator, ...)
-│   │   └── services/         Application services (AgentService, ArchiveService, WorkerService, ...)
-│   └── adapters/
-│       ├── agent/            KliopsOrchestrator: Ollama tool-calling loop
-│       ├── google_workspace/ WorkspaceAdapter: Drive upload, Docs batch update
-│       ├── handlers/         HTTP handlers and middleware
-│       ├── llm/              GemmaExtractor (text extraction), OllamaEmbedder
-│       ├── parser/           MinioPDFParser: downloads PDF from MinIO, extracts text
-│       ├── queue/            RabbitMQAdapter: publisher + consumer with DLQ
-│       └── repositories/     Postgres, MinIO, Qdrant, pricing adapters
-├── deployments/
-│   ├── docker-compose.yml    Local infrastructure (Postgres, MinIO, RabbitMQ, Qdrant)
-│   ├── migrations/           SQL migration files (sql-migrate format)
-│   └── k8s/
-│       └── kliops.yaml       Kubernetes manifests
-├── .github/workflows/        CI, release, and deploy pipelines
-├── Dockerfile                Multi-stage production image
-└── Makefile                  build, run, test, docker-up, docker-down targets
+```bash
+make test
 ```
 
----
+## API Documentation
+
+The OpenAPI 3.0 specification is available at [`docs/openapi.yaml`](docs/openapi.yaml).
+
+To explore it interactively, paste the file contents into [Swagger Editor](https://editor.swagger.io/) or use any OpenAPI-compatible viewer.
 
 ## License
 
-See [LICENSE](LICENSE).
+[GNU Affero General Public License v3.0](LICENSE)

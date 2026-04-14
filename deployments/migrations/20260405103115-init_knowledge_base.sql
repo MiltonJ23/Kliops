@@ -2,7 +2,7 @@
 -- +migrate Up
 CREATE TABLE appels_offres (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    external_id VARCHAR(100) UNIQUE NOT NULL,
+    external_id VARCHAR(100) UNIQUE NOT NULL, -- ID issu du CSV
     titre TEXT NOT NULL,
     client VARCHAR(255) NOT NULL,
     status VARCHAR(50) NOT NULL,
@@ -32,7 +32,6 @@ CREATE TABLE processing_jobs (
 CREATE INDEX idx_processing_jobs_appel_offre_id ON processing_jobs(appel_offre_id);
 CREATE INDEX idx_processing_jobs_status ON processing_jobs(status);
 
--- +migrate StatementBegin
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -40,7 +39,6 @@ BEGIN
     RETURN NEW;
 END;
 $$ language 'plpgsql';
--- +migrate StatementEnd
 
 CREATE TRIGGER update_processing_jobs_updated_at BEFORE UPDATE ON processing_jobs FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
@@ -54,20 +52,7 @@ CREATE TABLE reponses_historiques (
 );
 
 CREATE INDEX idx_reponses_historiques_appel_offre_id ON reponses_historiques(appel_offre_id);
-
-CREATE TABLE mercuriale (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    code_article VARCHAR(100) UNIQUE,
-    designation TEXT NOT NULL,
-    unite VARCHAR(50),
-    prix_unitaire NUMERIC(12,2) NOT NULL,
-    source VARCHAR(100) DEFAULT 'postgres',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-CREATE INDEX idx_mercuriale_code_article ON mercuriale(code_article);
 -- +migrate Down
-DROP TABLE mercuriale;
 DROP TABLE reponses_historiques;
 DROP TABLE processing_jobs;
 DROP TABLE documents;
