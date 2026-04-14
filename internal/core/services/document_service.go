@@ -1,4 +1,4 @@
-package services 
+package services
 
 import (
 	"context"
@@ -7,26 +7,27 @@ import (
 	"github.com/MiltonJ23/Kliops/internal/core/ports"
 )
 
+const (
+	configBucket      = "kliops-config"
+	templateObjectKey = "template_charte.docx"
+)
 
 type DocumentService struct {
-	Storage ports.FileStorage 
+	Storage   ports.FileStorage
 	Generator ports.DocumentGenerator
 }
 
-
-func NewDocumentService(storage ports.FileStorage,docGen ports.DocumentGenerator) *DocumentService {
+func NewDocumentService(storage ports.FileStorage, docGen ports.DocumentGenerator) *DocumentService {
 	return &DocumentService{
-		Storage: storage,
+		Storage:   storage,
 		Generator: docGen,
 	}
 }
 
-
-
 func (d *DocumentService) CompileTechnicalMemory(ctx context.Context, projectName string, variables map[string]string, targetEmail string) (string, error) {
-	templateStream,streamingErr  := d.Storage.DownloadStream(ctx,"kliops-config","template_charte.docs") 
-	if streamingErr  != nil {
-		return "", fmt.Errorf("failed to stream the Template of the company from MiniO:%v",streamingErr)
+	templateStream, streamingErr := d.Storage.DownloadStream(ctx, configBucket, templateObjectKey)
+	if streamingErr != nil {
+		return "", fmt.Errorf("failed to stream the template %s/%s from storage: %w", configBucket, templateObjectKey, streamingErr)
 	}
 
 	defer templateStream.Close()
@@ -42,6 +43,6 @@ func (d *DocumentService) CompileTechnicalMemory(ctx context.Context, projectNam
 	if err != nil {
 		return docURL, fmt.Errorf("document generated but sharing failed: %w", err)
 	}
-	
+
 	return docURL, nil
 }
