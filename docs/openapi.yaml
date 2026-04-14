@@ -1,0 +1,238 @@
+openapi: "3.0.3"
+info:
+  title: Kliops API
+  description: |
+    Agentic RFP response engine for the French BTP sector.
+    Automates technical memorandum generation from historical tender documents
+    using Gemma for requirement extraction and mxbai-embed-large for semantic search.
+  version: "0.3.0"
+  license:
+    name: GNU AGPL v3
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+  contact:
+    name: MiltonJ23
+    url: https://github.com/MiltonJ23/Kliops
+
+servers:
+  - url: http://localhost:8070
+    description: Local development
+
+security:
+  - ApiKeyAuth: []
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-KEY
+
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "OK"
+        message:
+          type: string
+          example: "Kliops API Gateway is running"
+
+    UploadResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "success"
+        path:
+          type: string
+          example: "minio://dce-entrants/document.pdf"
+
+    PriceResponse:
+      type: object
+      properties:
+        source:
+          type: string
+          enum: [excel, postgres, erp]
+        code_article:
+          type: string
+          example: "ART-001"
+        prix:
+          type: number
+          format: double
+          example: 42.50
+
+    IngestResponse:
+      type: object
+      properties:
+        message:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      security: []
+      tags: [System]
+      responses:
+        "200":
+          description: Service is running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /api/v1/upload:
+    post:
+      summary: Upload a DCE document
+      operationId: uploadDocument
+      tags: [Gateway]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [document]
+              properties:
+                document:
+                  type: string
+                  format: binary
+                  description: DCE file (max 50 MB)
+      responses:
+        "200":
+          description: File uploaded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadResponse"
+        "400":
+          description: Invalid request or filename
+        "500":
+          description: Upload failure
+
+  /api/v1/price:
+    get:
+      summary: Query a unit price
+      operationId: getPrice
+      tags: [Gateway]
+      parameters:
+        - name: source
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [excel, postgres, erp]
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Price retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PriceResponse"
+        "400":
+          description: Missing parameters
+        "500":
+          description: Internal error
+
+  /api/v1/ingest/archive:
+    post:
+      summary: Upload a ZIP archive for ingestion
+      operationId: ingestArchive
+      tags: [Ingestion]
+      description: |
+        Accepts a ZIP file containing a manifest.csv and associated PDF documents.
+        Processing is performed asynchronously via RabbitMQ workers.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [archive]
+              properties:
+                archive:
+                  type: string
+                  format: binary
+                  description: ZIP archive with manifest.csv and PDF files
+      responses:
+        "202":
+          description: Archive accepted for processing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResponse"
+        "400":
+          description: Invalid form or non-ZIP file
+        "500":
+          description: Processing failure
+
+  /api/v1/ingest/mercuriale:
+    post:
+      summary: Upload a price list spreadsheet
+      operationId: ingestMercuriale
+      tags: [Ingestion]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [excel_file]
+              properties:
+                excel_file:
+                  type: string
+                  format: binary
+                  description: XLSX price list file
+      responses:
+        "200":
+          description: Mercuriale updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResponse"
+        "400":
+          description: Invalid file format
+        "500":
+          description: Upload failure
+
+  /api/v1/ingest/template:
+    post:
+      summary: Upload a DOCX template
+      operationId: ingestTemplate
+      tags: [Ingestion]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [template_file]
+              properties:
+                template_file:
+                  type: string
+                  format: binary
+                  description: DOCX company charter template
+      responses:
+        "200":
+          description: Template uploaded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResponse"
+        "400":
+          description: Invalid file format
+        "500":
+          description: Upload failure
