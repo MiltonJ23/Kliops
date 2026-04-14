@@ -12,6 +12,7 @@ import (
 )
 
 // maxToolIterations caps the agentic loop to prevent infinite LLM cycles.
+
 const maxToolIterations = 12
 
 // llmModel is the Ollama model tag. Gemma 4 via Ollama uses the tag as-is.
