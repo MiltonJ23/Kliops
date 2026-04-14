@@ -12,82 +12,83 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+
 const (
 	ExchangeName = "kliops_ingestion"
-	QueueName    = "ingestion_jobs"
-	DLQExchange  = "kliops_dlx"
-	DLQQueue     = "ingestion_dlq"
-	MaxRetries   = 3
+	QueueName = "ingestion_jobs"
+	DLQExchange = "kliops_dlx"
+	DLQQueue = "ingestion_dlq"
+	MaxRetries = 3
 )
 
 type RabbitMQAdapter struct {
-	Conn      *amqp.Connection
+	Conn      *amqp.Connection 
 	Channel   *amqp.Channel
 	PublishMu sync.Mutex
 }
 
 type JobMessage struct {
-	JobID     string `json:"job_id"`
+	JobID string `json:"job_id"`
 	ProjectID string `json:"project_id"`
-	Retry     int    `json:"retry"`
+	Retry int `json:"retry"`
 }
 
-func NewRabbitMQAdapter(amqpUri string) (*RabbitMQAdapter, error) {
+func NewRabbitMQAdapter(amqpUri string) (*RabbitMQAdapter,error) {
 	conn, dialingRabbitError := amqp.Dial(amqpUri)
 	if dialingRabbitError != nil {
-		return nil, fmt.Errorf("failed to dial the rabbitmq instance : %v", dialingRabbitError)
+		return nil, fmt.Errorf("failed to dial the rabbitmq instance : %v",dialingRabbitError)
 	}
 
 	ch, channelCreationError := conn.Channel()
 	if channelCreationError != nil {
 		conn.Close()
-		return nil, fmt.Errorf("failed to establish a new channel on top of the established connection : %v", channelCreationError)
+		return nil, fmt.Errorf("failed to establish a new channel on top of the established connection : %v",channelCreationError)
 	}
 
-	// let's setup the DLQ
-	dlqExchangeDeclarationError := ch.ExchangeDeclare(DLQExchange, "direct", true, false, false, false, nil)
+	// let's setup the DLQ 
+	dlqExchangeDeclarationError := ch.ExchangeDeclare(DLQExchange,"direct",true, false,false,false,nil)
 	if dlqExchangeDeclarationError != nil {
 		ch.Close()
 		conn.Close()
-		return nil, fmt.Errorf("failed to create the exchange %s, an error occured : %v", DLQExchange, dlqExchangeDeclarationError)
+		return nil, fmt.Errorf("failed to create the exchange %s, an error occured : %v",DLQExchange,dlqExchangeDeclarationError)
 	}
-	_, dqlQueueDeclarationError := ch.QueueDeclare(DLQQueue, true, false, false, false, nil)
+	_,dqlQueueDeclarationError := ch.QueueDeclare(DLQQueue,true,false,false,false,nil)
 	if dqlQueueDeclarationError != nil {
 		ch.Close()
 		conn.Close()
-		return nil, fmt.Errorf("failed to create the dlq queue %s , an error occured : %v", DLQQueue, dqlQueueDeclarationError)
+		return nil, fmt.Errorf("failed to create the dlq queue %s , an error occured : %v",DLQQueue,dqlQueueDeclarationError)
 	}
-	bindingDlqQueueAndExchangeError := ch.QueueBind(DLQQueue, "", DLQExchange, false, nil)
+	bindingDlqQueueAndExchangeError := ch.QueueBind(DLQQueue,"",DLQExchange,false,nil)
 	if bindingDlqQueueAndExchangeError != nil {
 		ch.Close()
 		conn.Close()
-		return nil, fmt.Errorf("failed to bind the Queue %s to the exchange %s , an error occured : %v", DLQQueue, DLQExchange, bindingDlqQueueAndExchangeError)
+		return nil,fmt.Errorf("failed to bind the Queue %s to the exchange %s , an error occured : %v",DLQQueue,DLQExchange,bindingDlqQueueAndExchangeError)
 	}
 
-	//Setup main queue with DLQ arguments
+	//Setup main queue with DLQ arguments 
 	args := amqp.Table{
-		"x-dead-letter-exchange": DLQExchange,
+		"x-dead-letter-exchange":DLQExchange,
 	}
-	mainExchangeDeclarationError := ch.ExchangeDeclare(ExchangeName, "direct", true, false, false, false, nil)
+	mainExchangeDeclarationError := ch.ExchangeDeclare(ExchangeName,"direct",true,false,false,false,nil)
 	if mainExchangeDeclarationError != nil {
 		ch.Close()
 		conn.Close()
-		return nil, fmt.Errorf("failed to create the exchange %s, an error occured : %v", ExchangeName, mainExchangeDeclarationError)
+		return nil, fmt.Errorf("failed to create the exchange %s, an error occured : %v",ExchangeName,mainExchangeDeclarationError)
 	}
-	_, mainQueueDeclarationError := ch.QueueDeclare(QueueName, true, false, false, false, args)
+	_,mainQueueDeclarationError := ch.QueueDeclare(QueueName,true,false,false,false,args)
 	if mainQueueDeclarationError != nil {
 		ch.Close()
 		conn.Close()
-		return nil, fmt.Errorf("failed to create the main queue %s , an error occured : %v", QueueName, mainQueueDeclarationError)
+		return nil, fmt.Errorf("failed to create the main queue %s , an error occured : %v",QueueName,mainQueueDeclarationError)
 	}
-	bindingQueueAndExchangeError := ch.QueueBind(QueueName, "", ExchangeName, false, nil)
+	bindingQueueAndExchangeError := ch.QueueBind(QueueName,"",ExchangeName,false,nil)
 	if bindingQueueAndExchangeError != nil {
 		ch.Close()
 		conn.Close()
-		return nil, fmt.Errorf("failed to bind the Queue %s to the exchange %s , an error occured : %v", QueueName, ExchangeName, bindingQueueAndExchangeError)
+		return nil,fmt.Errorf("failed to bind the Queue %s to the exchange %s , an error occured : %v",QueueName,ExchangeName,bindingQueueAndExchangeError)
 	}
 
-	return &RabbitMQAdapter{Conn: conn, Channel: ch}, nil
+	return &RabbitMQAdapter{Conn:conn,Channel:ch,},nil
 }
 
 func (r *RabbitMQAdapter) Close() error {
@@ -105,33 +106,34 @@ func (r *RabbitMQAdapter) Close() error {
 	return errors.Join(errs...)
 }
 
-func (r *RabbitMQAdapter) PublishJob(ctx context.Context, jobID, projectID string) error {
-	msg := JobMessage{JobID: jobID, ProjectID: projectID, Retry: 0}
+func (r *RabbitMQAdapter) PublishJob(ctx context.Context,jobID,projectID string) error {
+	msg:= JobMessage{JobID:jobID,ProjectID:projectID,Retry:0}
 	body, marshallingbodyError := json.Marshal(msg)
 	if marshallingbodyError != nil {
-		return fmt.Errorf("an error happened while marshalling the Job: %s , to be published over rabbitmq: %v ", jobID, marshallingbodyError)
+		return fmt.Errorf("an error happened while marshalling the Job: %s , to be published over rabbitmq: %v ",jobID,marshallingbodyError)
 	}
 
 	r.PublishMu.Lock()
 	defer r.PublishMu.Unlock()
-
-	return r.Channel.PublishWithContext(ctx, ExchangeName, "", false, false, amqp.Publishing{
-		ContentType:  "application/json",
-		Body:         body,
-		DeliveryMode: amqp.Persistent,
+	
+	return r.Channel.PublishWithContext(ctx,ExchangeName,"",false,false,amqp.Publishing{
+		ContentType: "application/json",
+		Body:	body,
+		DeliveryMode: 	amqp.Persistent,
 	})
 }
 
-func (r *RabbitMQAdapter) ConsumeJob(ctx context.Context, maxConcurrency int, handler func(ctx context.Context, jobID, projectID string) error) error {
-	msgs, channelCreationError := r.Channel.Consume(QueueName, "", false, false, false, false, nil)
+
+func (r *RabbitMQAdapter) ConsumeJob(ctx context.Context,maxConcurrency int, handler func(ctx context.Context, jobID, projectID string) error) error {
+	msgs, channelCreationError := r.Channel.Consume(QueueName,"",false,false,false,false,nil)
 	if channelCreationError != nil {
-		return fmt.Errorf("failed to consume from Queue : %v", channelCreationError)
+		return fmt.Errorf("failed to consume from Queue : %v",channelCreationError)
 	}
-
+	
 	// This will work more likely like a worker pool
-	sem := make(chan struct{}, maxConcurrency)
+	sem := make(chan struct {},maxConcurrency)
 
-	go func() {
+	go func(){
 		for {
 			select {
 			case <-ctx.Done():
@@ -140,19 +142,13 @@ func (r *RabbitMQAdapter) ConsumeJob(ctx context.Context, maxConcurrency int, ha
 				if !ok {
 					return
 				}
-				// let's launch the processing of a message in its own isolated goroutine
-				go func(delivery amqp.Delivery) {
+				// let's launch the processing of a message in its own isolated goroutine 
+				go func (delivery amqp.Delivery){
 					acquired := false
-					release := func() {
-						if acquired {
-							<-sem
-							acquired = false
-						}
-					}
 					select {
 					case sem <- struct{}{}:
 						acquired = true
-						defer release()
+						defer func() { if acquired { <-sem } }()
 					case <-ctx.Done():
 						return
 					}
@@ -160,29 +156,32 @@ func (r *RabbitMQAdapter) ConsumeJob(ctx context.Context, maxConcurrency int, ha
 					// Check context before processing
 					if ctx.Err() != nil {
 						delivery.Nack(false, true) // Requeue
+						<-sem
 						return
 					}
 
-					var msg JobMessage
-					unmarshalingMessageError := json.Unmarshal(delivery.Body, &msg)
+					var msg JobMessage 
+					unmarshalingMessageError := json.Unmarshal(delivery.Body,&msg)
 					if unmarshalingMessageError != nil {
-						log.Printf("Unprocessable message format, dropping message : %v", unmarshalingMessageError)
-						delivery.Nack(false, false) // we send it directly to DLQ so that i can look at it after
-						return
+						log.Printf("Unprocessable message format, dropping message : %v",unmarshalingMessageError)
+						delivery.Nack(false,false) // we send it directly to DLQ so that i can look at it after 
+						<-sem
+						return 
 					}
-					handlingErr := handler(ctx, msg.JobID, msg.ProjectID)
+					handlingErr := handler(ctx,msg.JobID,msg.ProjectID)
 					if handlingErr != nil {
-						msg.Retry++
+						msg.Retry++ 
 						if msg.Retry > MaxRetries {
-							log.Printf("Job %s failed permanently after %d retries . Moving to DLQ.", msg.JobID, MaxRetries)
-							delivery.Nack(false, false)
+							log.Printf("Job %s failed permanently after %d retries . Moving to DLQ.",msg.JobID,MaxRetries)
+							delivery.Nack(false,false)
 						} else {
-							log.Printf("Job %s failed (Attempt %d/%d). Requeueing ", msg.JobID, msg.Retry, MaxRetries)
+							log.Printf("Job %s failed (Attempt %d/%d). Requeueing ",msg.JobID,msg.Retry,MaxRetries)
 
 							// Perform retry synchronously instead of in a nested goroutine
-							release()
+							<-sem
+							acquired = false
 							select {
-							case <-time.After(time.Duration(msg.Retry*5) * time.Second):
+							case <-time.After(time.Duration(msg.Retry * 5) * time.Second):
 								sem <- struct{}{}
 								acquired = true
 
@@ -200,9 +199,9 @@ func (r *RabbitMQAdapter) ConsumeJob(ctx context.Context, maxConcurrency int, ha
 								}
 
 								r.PublishMu.Lock()
-								publishErr := r.Channel.PublishWithContext(ctx, ExchangeName, "", false, false, amqp.Publishing{
-									ContentType:  "application/json",
-									Body:         body,
+								publishErr := r.Channel.PublishWithContext(ctx,ExchangeName,"",false,false,amqp.Publishing{
+									ContentType: "application/json",
+									Body: body,
 									DeliveryMode: amqp.Persistent,
 								})
 								r.PublishMu.Unlock()
@@ -219,7 +218,7 @@ func (r *RabbitMQAdapter) ConsumeJob(ctx context.Context, maxConcurrency int, ha
 								return
 							}
 						}
-						return
+						return 
 					}
 					delivery.Ack(false)
 				}(d)

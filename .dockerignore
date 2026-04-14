@@ -1,8 +1,0 @@
-.git
-.gitignore
-.env
-credentials.json
-bin/
-.github/
-deployments/docker-compose.yml
-**/*_test.go

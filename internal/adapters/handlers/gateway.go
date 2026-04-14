@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"errors"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/MiltonJ23/Kliops/internal/core/ports"
 	"github.com/MiltonJ23/Kliops/internal/core/services"
-	"github.com/jackc/pgx/v5"
 )
 
 type readCloser struct {
@@ -98,11 +96,9 @@ func (h *GatewayHandler) HandlePrice(w http.ResponseWriter, r *http.Request) {
 
 	price, err := h.Pricing.GetPrice(r.Context(),source,code)
 	if err != nil {
+		// Log the full error server-side
 		log.Printf("Error getting price for code %s from source %s: %v", code, source, err)
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "article not found", http.StatusNotFound)
-			return
-		}
+		// Return generic message to client
 		http.Error(w,"internal server error",http.StatusInternalServerError)
 		return
 	}
