@@ -1,32 +1,29 @@
-# ---------------------------------------------------------------------------
-# Stage 1: Build
-# ---------------------------------------------------------------------------
-FROM golang:1.25-alpine AS builder
-
-RUN apk add --no-cache git ca-certificates tzdata
+FROM golang:1.25.3-alpine AS builder
 
 WORKDIR /src
+RUN apk add --no-cache ca-certificates git tzdata
 
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
 
+ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -ldflags="-s -w" -trimpath -o /bin/kliops-api ./cmd/kliops-api
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/kliops-api ./cmd/kliops-api
 
-# ---------------------------------------------------------------------------
-# Stage 2: Runtime
-# ---------------------------------------------------------------------------
-FROM alpine:3.21
+FROM alpine:3.22
 
-RUN apk add --no-cache ca-certificates tzdata \
-    && addgroup -S kliops && adduser -S kliops -G kliops
+RUN addgroup -S kliops && adduser -S -G kliops kliops && \
+    apk add --no-cache ca-certificates tzdata
 
-COPY --from=builder /bin/kliops-api /usr/local/bin/kliops-api
+WORKDIR /app
+COPY --from=builder /out/kliops-api /app/kliops-api
+COPY dummy_prices.xlsx /app/dummy_prices.xlsx
 
-USER kliops
+ENV APP_ADDR=:8070 \
+    PRICING_EXCEL_PATH=/app/dummy_prices.xlsx
 
 EXPOSE 8070
-
-ENTRYPOINT ["kliops-api"]
+USER kliops
+ENTRYPOINT ["/app/kliops-api"]

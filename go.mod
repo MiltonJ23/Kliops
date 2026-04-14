@@ -10,6 +10,7 @@ require (
 	github.com/minio/minio-go/v7 v7.0.100
 	github.com/qdrant/go-client v1.17.1
 	github.com/rabbitmq/amqp091-go v1.10.0
+	github.com/sashabaranov/go-openai v1.41.2
 	github.com/shopspring/decimal v1.4.0
 	github.com/xuri/excelize/v2 v2.10.1
 	google.golang.org/api v0.275.0
