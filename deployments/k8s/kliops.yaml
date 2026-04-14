@@ -1,0 +1,143 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: NAMESPACE_PLACEHOLDER
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kliops-config
+  namespace: NAMESPACE_PLACEHOLDER
+data:
+  APP_ADDR: ":8070"
+  MINIO_USE_SSL: "true"
+  OLLAMA_BASE_URL: "http://ollama:11434"
+  OLLAMA_CHAT_MODEL: "gemma4:e4b"
+  OLLAMA_EMBED_MODEL: "mxbai-embed-large"
+  QDRANT_COLLECTION: "btp_knowledge"
+  PRICING_EXCEL_PATH: "/app/dummy_prices.xlsx"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kliops-secrets
+  namespace: NAMESPACE_PLACEHOLDER
+type: Opaque
+stringData:
+  DATABASE_URL: "postgres://user:password@postgres:5432/kliops?sslmode=disable"
+  MINIO_ENDPOINT: "minio:9000"
+  MINIO_ROOT_USER: "minio"
+  MINIO_ROOT_PASSWORD: "change-me"
+  RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+  QDRANT_ADDR: "qdrant:6334"
+  API_KEY_SECRET: "change-me"
+  ERP_BASE_URL: ""
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kliops-google-credentials
+  namespace: NAMESPACE_PLACEHOLDER
+type: Opaque
+stringData:
+  credentials.json: |
+    {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kliops-api
+  namespace: NAMESPACE_PLACEHOLDER
+  labels:
+    app: kliops-api
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: kliops-api
+  template:
+    metadata:
+      labels:
+        app: kliops-api
+    spec:
+      containers:
+        - name: kliops-api
+          image: IMAGE_REPOSITORY_PLACEHOLDER:IMAGE_TAG_PLACEHOLDER
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8070
+          envFrom:
+            - configMapRef:
+                name: kliops-config
+            - secretRef:
+                name: kliops-secrets
+          env:
+            - name: GOOGLE_CREDENTIALS_FILE
+              value: /var/run/secrets/google/credentials.json
+          volumeMounts:
+            - name: google-credentials
+              mountPath: /var/run/secrets/google
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: google-credentials
+          secret:
+            secretName: kliops-google-credentials
+            items:
+              - key: credentials.json
+                path: credentials.json
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kliops-api
+  namespace: NAMESPACE_PLACEHOLDER
+spec:
+  selector:
+    app: kliops-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kliops-api
+  namespace: NAMESPACE_PLACEHOLDER
+  annotations:
+    kubernetes.io/ingress.class: nginx
+spec:
+  rules:
+    - host: kliops.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kliops-api
+                port:
+                  number: 80
