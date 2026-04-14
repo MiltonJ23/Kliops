@@ -3,10 +3,10 @@ package services
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 )
 
-// mockPricingStrategy is a test double implementing ports.PricingStrategy
 type mockPricingStrategy struct {
 	price float64
 	err   error
@@ -149,4 +149,69 @@ func TestGetPrice_EmptySourceName_ReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty source, got nil")
 	}
+}
+func TestPricingService_RegisterAndQuery(t *testing.T) {
+	svc := NewPricingService()
+	mock := &mockPricingStrategy{price: 42.5}
+	svc.RegisterStrategy("excel", mock)
+
+	price, err := svc.GetPrice(context.Background(), "excel", "ART-001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if price != 42.5 {
+		t.Errorf("expected 42.5, got %f", price)
+	}
+}
+
+func TestPricingService_UnknownSource(t *testing.T) {
+	svc := NewPricingService()
+
+	_, err := svc.GetPrice(context.Background(), "nonexistent", "ART-001")
+	if err == nil {
+		t.Fatal("expected error for unknown source, got nil")
+	}
+}
+
+func TestPricingService_StrategyErrorPropagated(t *testing.T) {
+	svc := NewPricingService()
+	expectedErr := errors.New("db unavailable")
+	mock := &mockPricingStrategy{err: expectedErr}
+	svc.RegisterStrategy("postgres", mock)
+
+	_, err := svc.GetPrice(context.Background(), "postgres", "ART-002")
+	if !errors.Is(err, expectedErr) {
+		t.Errorf("expected %v, got %v", expectedErr, err)
+	}
+}
+
+func TestPricingService_NilStrategyIgnored(t *testing.T) {
+	svc := NewPricingService()
+
+	// Must not panic and must not register the nil strategy.
+	svc.RegisterStrategy("x", nil)
+
+	_, err := svc.GetPrice(context.Background(), "x", "ART-003")
+	if err == nil {
+		t.Fatal("expected error because nil strategy should not be registered")
+	}
+}
+
+func TestPricingService_ConcurrentAccess(t *testing.T) {
+	svc := NewPricingService()
+	mock := &mockPricingStrategy{price: 1.0}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				svc.RegisterStrategy("src", mock)
+			} else {
+				svc.GetPrice(context.Background(), "src", "ART-X") //nolint:errcheck
+			}
+		}(i)
+	}
+	wg.Wait()
 }

@@ -2,7 +2,7 @@
 -- +migrate Up
 CREATE TABLE appels_offres (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    external_id VARCHAR(100) UNIQUE NOT NULL, -- ID issu du CSV
+    external_id VARCHAR(100) UNIQUE NOT NULL,
     titre TEXT NOT NULL,
     client VARCHAR(255) NOT NULL,
     status VARCHAR(50) NOT NULL,
@@ -54,7 +54,20 @@ CREATE TABLE reponses_historiques (
 );
 
 CREATE INDEX idx_reponses_historiques_appel_offre_id ON reponses_historiques(appel_offre_id);
+
+CREATE TABLE mercuriale (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code_article VARCHAR(100) UNIQUE,
+    designation TEXT NOT NULL,
+    unite VARCHAR(50),
+    prix_unitaire NUMERIC(12,2) NOT NULL,
+    source VARCHAR(100) DEFAULT 'postgres',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_mercuriale_code_article ON mercuriale(code_article);
 -- +migrate Down
+DROP TABLE mercuriale;
 DROP TABLE reponses_historiques;
 DROP TABLE processing_jobs;
 DROP TABLE documents;
