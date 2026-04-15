@@ -146,21 +146,19 @@ func (r *RabbitMQAdapter) ConsumeJob(ctx context.Context,maxConcurrency int, han
 				if !ok {
 					return
 				}
-				// let's launch the processing of a message in its own isolated goroutine 
+				// Acquire semaphore before spawning goroutine to cap concurrent goroutines
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
 				go func (delivery amqp.Delivery){
-					acquired := false
-					select {
-					case sem <- struct{}{}:
-						acquired = true
-						defer func() { if acquired { <-sem } }()
-					case <-ctx.Done():
-						return
-					}
+					acquired := true
+					defer func() { if acquired { <-sem } }()
 
 					// Check context before processing
 					if ctx.Err() != nil {
 						delivery.Nack(false, true) // Requeue
-						<-sem
 						return
 					}
 
@@ -169,7 +167,6 @@ func (r *RabbitMQAdapter) ConsumeJob(ctx context.Context,maxConcurrency int, han
 					if unmarshalingMessageError != nil {
 						log.Printf("Unprocessable message format, dropping message : %v",unmarshalingMessageError)
 						delivery.Nack(false,false) // we send it directly to DLQ so that i can look at it after 
-						<-sem
 						return 
 					}
 					handlingErr := handler(ctx,msg.JobID,msg.ProjectID)
