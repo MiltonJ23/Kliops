@@ -3,7 +3,10 @@
 .env
 .env.*
 credentials.json
+**/*credentials*.json
 *.json
+**/*.pem
+**/*.key
 !dummy_prices.xlsx
 bin/
 .github/

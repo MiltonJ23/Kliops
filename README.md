@@ -42,7 +42,7 @@ Kliops is an agentic RFP (Request for Proposal) response engine built in Go for 
 
 Hexagonal architecture with strict separation between domain logic and external infrastructure.
 
-```
+```text
 cmd/kliops-api/main.go            HTTP server, dependency wiring
 internal/core/domain/              Domain entities
 internal/core/ports/               Interface contracts
@@ -63,7 +63,7 @@ Full architecture documentation is available in the [Wiki](https://github.com/Mi
 
 ## Ingestion Pipeline
 
-```
+```text
 ZIP (manifest.csv + PDFs)
   |
   v
@@ -95,11 +95,11 @@ All endpoints under `/api/v1/` require the `X-API-KEY` header.
 | Method | Path                        | Description                              |
 |--------|-----------------------------|------------------------------------------|
 | GET    | `/health`                   | Health check (no auth)                   |
-| POST   | `/api/v1/upload`            | Upload a DCE document (max 50 MB)        |
-| GET    | `/api/v1/price`             | Query unit price by source and code      |
-| POST   | `/api/v1/ingest/archive`    | Upload ZIP archive for async ingestion   |
-| POST   | `/api/v1/ingest/mercuriale` | Upload XLSX price list                   |
-| POST   | `/api/v1/ingest/template`   | Upload DOCX company charter template     |
+| POST   | `/api/v1/upload`            | Upload a DCE document (field: `document`, max 50 MB) |
+| GET    | `/api/v1/price`             | Query unit price by `source` and `code`  |
+| POST   | `/api/v1/ingest/archive`    | Upload ZIP archive (field: `archive`) for async ingestion. The ZIP must contain a `manifest.csv` and the referenced PDF files |
+| POST   | `/api/v1/ingest/mercuriale` | Upload XLSX price list (field: `excel_file`) |
+| POST   | `/api/v1/ingest/template`   | Upload DOCX company charter template (field: `template_file`) |
 
 See the full [API Reference](https://github.com/MiltonJ23/Kliops/wiki/API-Reference) in the Wiki or the [OpenAPI specification](docs/openapi.yaml).
 
@@ -113,7 +113,7 @@ See the full [API Reference](https://github.com/MiltonJ23/Kliops/wiki/API-Refere
 | Qdrant     | qdrant/qdrant          | Vector database (gRPC)            | 6333, 6334  |
 | Ollama     | (external)             | LLM runtime (Gemma + embedder)    | 11434       |
 
-All services except Ollama are defined in `deployments/docker-compose.yml`.
+All services except Ollama are defined in `deployments/docker-compose.yml` for local development and in `deployments/k8s/kliops.yaml` for Kubernetes.
 
 ## Getting Started
 
@@ -164,6 +164,19 @@ docker pull ghcr.io/miltonj23/kliops:latest
 ```bash
 make test
 ```
+
+### Kubernetes
+
+A single manifest at [`deployments/k8s/kliops.yaml`](deployments/k8s/kliops.yaml) deploys the full stack — PostgreSQL, MinIO, RabbitMQ, Qdrant, and the Kliops API — with persistent volumes, health probes, and an Ingress.
+
+```bash
+# Edit the Secret values in deployments/k8s/kliops.yaml before applying
+# Replace NAMESPACE_PLACEHOLDER, IMAGE_REPOSITORY_PLACEHOLDER, IMAGE_TAG_PLACEHOLDER
+
+kubectl apply -f deployments/k8s/kliops.yaml
+```
+
+The [`deploy.yml`](.github/workflows/deploy.yml) GitHub Actions workflow automates this: it renders the placeholders and runs `kubectl apply`.
 
 ## API Documentation
 

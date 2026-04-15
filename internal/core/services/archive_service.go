@@ -40,7 +40,7 @@ func (s *ArchiveService) UploadFileFromZip(ctx context.Context, z *zip.ReadClose
 				contentType = "application/octet-stream"
 			}
 
-			path, uploadingFileError := s.Storage.Upload(ctx, "dce-archive", fmt.Sprintf("%s/%s", projectId, filename), rc, int64(f.UncompressedSize64), contentType)
+			path, uploadingFileError := s.Storage.Upload(ctx, "dce-archive", fmt.Sprintf("%s/%s/%s", projectId, strings.ToLower(docType), filename), rc, int64(f.UncompressedSize64), contentType)
 			if uploadingFileError != nil {
 				return nil, fmt.Errorf("an error occurred while uploading file %s , into the bucket:%v", filename, uploadingFileError)
 			}
