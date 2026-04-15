@@ -1,0 +1,528 @@
+# =============================================================================
+# Kliops — Full-Stack Kubernetes Manifest
+# =============================================================================
+# Deploys the entire Kliops platform in a single file:
+#   - Namespace
+#   - PostgreSQL   (StatefulSet + PVC + Service)
+#   - MinIO        (StatefulSet + PVC + Service)
+#   - RabbitMQ     (StatefulSet + PVC + Service)
+#   - Qdrant       (StatefulSet + PVC + Service)
+#   - Kliops API   (Deployment  + Service + Ingress)
+#   - ConfigMap    (non-sensitive settings)
+#   - Secret       (credentials — replace placeholder values before applying)
+#
+# Usage:
+#   kubectl apply -f deployments/k8s/kliops.yaml
+#
+# The deploy.yml GitHub Actions workflow renders IMAGE_REPOSITORY_PLACEHOLDER,
+# IMAGE_TAG_PLACEHOLDER, and NAMESPACE_PLACEHOLDER before applying.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Namespace
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: NAMESPACE_PLACEHOLDER
+  labels:
+    app.kubernetes.io/part-of: kliops
+
+---
+# ---------------------------------------------------------------------------
+# ConfigMap — non-sensitive configuration
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kliops-config
+  namespace: NAMESPACE_PLACEHOLDER
+  labels:
+    app.kubernetes.io/part-of: kliops
+data:
+  # PostgreSQL
+  POSTGRES_DB: "kliops"
+
+  # MinIO — plain HTTP inside the cluster
+  MINIO_ENDPOINT: "minio:9000"
+  MINIO_USE_SSL: "false"
+
+  # RabbitMQ
+  RABBITMQ_URI: "amqp://kliops:kliops@rabbitmq:5672/"
+
+  # Qdrant (gRPC)
+  QDRANT_ADDR: "qdrant:6334"
+
+  # Kliops API
+  DB_DSN: "postgres://kliops:kliops@postgres:5432/kliops?sslmode=disable"
+  APP_ADDR: ":8070"
+
+---
+# ---------------------------------------------------------------------------
+# Secret — sensitive credentials (replace values before applying to production)
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kliops-secrets
+  namespace: NAMESPACE_PLACEHOLDER
+  labels:
+    app.kubernetes.io/part-of: kliops
+type: Opaque
+stringData:
+  POSTGRES_USER: "kliops"
+  POSTGRES_PASSWORD: "kliops"
+  MINIO_ROOT_USER: "minioadmin"
+  MINIO_ROOT_PASSWORD: "minioadmin"
+  RABBITMQ_USER: "kliops"
+  RABBITMQ_PASSWORD: "kliops"
+  API_KEY_SECRET: "changeme"
+
+---
+# ===========================================================================
+#  PostgreSQL
+# ===========================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: NAMESPACE_PLACEHOLDER
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: kliops
+spec:
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+  clusterIP: None            # headless for StatefulSet
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: NAMESPACE_PLACEHOLDER
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: kliops
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: kliops-secrets
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kliops-secrets
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: kliops-config
+                  key: POSTGRES_DB
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "kliops", "-d", "kliops"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "kliops", "-d", "kliops"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+
+---
+# ===========================================================================
+#  MinIO
+# ===========================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: NAMESPACE_PLACEHOLDER
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/part-of: kliops
+spec:
+  selector:
+    app.kubernetes.io/name: minio
+  ports:
+    - name: api
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001
+  clusterIP: None
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  namespace: NAMESPACE_PLACEHOLDER
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/part-of: kliops
+spec:
+  serviceName: minio
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: minio
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minio
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:latest
+          args: ["server", "/data", "--console-address", ":9001"]
+          ports:
+            - containerPort: 9000
+            - containerPort: 9001
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: kliops-secrets
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kliops-secrets
+                  key: MINIO_ROOT_PASSWORD
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: 9000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          volumeMounts:
+            - name: minio-data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: minio-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+
+---
+# ===========================================================================
+#  RabbitMQ
+# ===========================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: NAMESPACE_PLACEHOLDER
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/part-of: kliops
+spec:
+  selector:
+    app.kubernetes.io/name: rabbitmq
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: 5672
+    - name: management
+      port: 15672
+      targetPort: 15672
+  clusterIP: None
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+  namespace: NAMESPACE_PLACEHOLDER
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/part-of: kliops
+spec:
+  serviceName: rabbitmq
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rabbitmq
+    spec:
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:4-management
+          ports:
+            - containerPort: 5672
+            - containerPort: 15672
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: kliops-secrets
+                  key: RABBITMQ_USER
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: kliops-secrets
+                  key: RABBITMQ_PASSWORD
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          volumeMounts:
+            - name: rabbitmq-data
+              mountPath: /var/lib/rabbitmq
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: rabbitmq-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
+
+---
+# ===========================================================================
+#  Qdrant
+# ===========================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant
+  namespace: NAMESPACE_PLACEHOLDER
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/part-of: kliops
+spec:
+  selector:
+    app.kubernetes.io/name: qdrant
+  ports:
+    - name: http
+      port: 6333
+      targetPort: 6333
+    - name: grpc
+      port: 6334
+      targetPort: 6334
+  clusterIP: None
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: qdrant
+  namespace: NAMESPACE_PLACEHOLDER
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/part-of: kliops
+spec:
+  serviceName: qdrant
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: qdrant
+    spec:
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:latest
+          ports:
+            - containerPort: 6333
+            - containerPort: 6334
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 6333
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 6333
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          volumeMounts:
+            - name: qdrant-data
+              mountPath: /qdrant/storage
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: qdrant-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+
+---
+# ===========================================================================
+#  Kliops API
+# ===========================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: kliops-api
+  namespace: NAMESPACE_PLACEHOLDER
+  labels:
+    app.kubernetes.io/name: kliops-api
+    app.kubernetes.io/part-of: kliops
+spec:
+  selector:
+    app.kubernetes.io/name: kliops-api
+  ports:
+    - port: 8070
+      targetPort: 8070
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kliops-api
+  namespace: NAMESPACE_PLACEHOLDER
+  labels:
+    app.kubernetes.io/name: kliops-api
+    app.kubernetes.io/part-of: kliops
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kliops-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kliops-api
+    spec:
+      containers:
+        - name: kliops-api
+          image: IMAGE_REPOSITORY_PLACEHOLDER:IMAGE_TAG_PLACEHOLDER
+          ports:
+            - containerPort: 8070
+          envFrom:
+            - configMapRef:
+                name: kliops-config
+            - secretRef:
+                name: kliops-secrets
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8070
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8070
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+---
+# ===========================================================================
+#  Ingress — route external traffic to the API
+# ===========================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kliops-ingress
+  namespace: NAMESPACE_PLACEHOLDER
+  labels:
+    app.kubernetes.io/part-of: kliops
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: kliops.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kliops-api
+                port:
+                  number: 8070

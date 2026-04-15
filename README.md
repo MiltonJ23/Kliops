@@ -113,7 +113,7 @@ See the full [API Reference](https://github.com/MiltonJ23/Kliops/wiki/API-Refere
 | Qdrant     | qdrant/qdrant          | Vector database (gRPC)            | 6333, 6334  |
 | Ollama     | (external)             | LLM runtime (Gemma + embedder)    | 11434       |
 
-All services except Ollama are defined in `deployments/docker-compose.yml`.
+All services except Ollama are defined in `deployments/docker-compose.yml` for local development and in `deployments/k8s/kliops.yaml` for Kubernetes.
 
 ## Getting Started
 
@@ -164,6 +164,19 @@ docker pull ghcr.io/miltonj23/kliops:latest
 ```bash
 make test
 ```
+
+### Kubernetes
+
+A single manifest at [`deployments/k8s/kliops.yaml`](deployments/k8s/kliops.yaml) deploys the full stack — PostgreSQL, MinIO, RabbitMQ, Qdrant, and the Kliops API — with persistent volumes, health probes, and an Ingress.
+
+```bash
+# Edit the Secret values in deployments/k8s/kliops.yaml before applying
+# Replace NAMESPACE_PLACEHOLDER, IMAGE_REPOSITORY_PLACEHOLDER, IMAGE_TAG_PLACEHOLDER
+
+kubectl apply -f deployments/k8s/kliops.yaml
+```
+
+The [`deploy.yml`](.github/workflows/deploy.yml) GitHub Actions workflow automates this: it renders the placeholders and runs `kubectl apply`.
 
 ## API Documentation
 
